@@ -113,6 +113,8 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
   const [winner, setWinner] = useState<0 | 1 | 2>(0); // 0=无获胜者, 1=黑棋获胜, 2=白棋获胜
   const [winningLine, setWinningLine] = useState<[number, number][]>([]); // 获胜的5个棋子位置
   const [roomId, setRoomId] = useState<string>(() => generateRoomId()); // 房间号
+  const [player1Online, setPlayer1Online] = useState<boolean>(true); // 玩家1在线状态
+  const [player2Online, setPlayer2Online] = useState<boolean>(false); // 玩家2在线状态
 
   // 检测五子连线
   const checkWin = (board: number[][], row: number, col: number, player: number): [number, number][] | null => {
@@ -420,7 +422,7 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
         animate={{ opacity: 1 }}
         transition={{ delay: 1, duration: 0.8 }}
       >
-        <div className="flex items-center justify-center gap-4 mb-3 h-8 min-h-8">
+        <div className="flex flex-col items-center gap-3 mb-3">
           <div className="flex items-center gap-2 h-full">
             <div
               className={`w-4 h-4 rounded-full border ${
@@ -438,22 +440,17 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
               style={{ fontSize: '16px', lineHeight: '20px' }}
             >
               {winner === 0
-                ? `${currentPlayer === 1 ? '黑棋' : '白棋'}的回合`
-                : `🎉 ${winner === 1 ? '黑棋' : '白棋'}获胜！`
+                ? `${currentPlayer === 1 ? '玩家1' : '玩家2'}的回合`
+                : `🎉 ${winner === 1 ? '玩家1' : '玩家2'}获胜！`
               }
             </span>
           </div>
           <button
             onClick={resetGame}
-            className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
           >
-            重新开始
+            准备
           </button>
-        </div>
-        <div className="text-gray-600 text-sm h-6 flex flex-col items-center justify-center">
-          <p className="text-center text-yellow-600" style={{ height: '16px' }}>
-            {winner !== 0 ? '获胜棋子已高亮显示' : ''}
-          </p>
         </div>
 
         {/* 房间号显示 */}
@@ -466,6 +463,26 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
           <p className="text-gray-600 text-sm">
             房间号: <span className="font-mono font-semibold text-gray-800">{roomId}</span>
           </p>
+
+          {/* 玩家指示灯 */}
+          <div className="mt-4 flex justify-center gap-6">
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-3 h-3 rounded-full transition-colors duration-300 ${
+                  player1Online ? 'bg-green-500' : 'bg-gray-400'
+                }`}
+              />
+              <span className="text-gray-600 text-sm">玩家1</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-3 h-3 rounded-full transition-colors duration-300 ${
+                  player2Online ? 'bg-green-500' : 'bg-gray-400'
+                }`}
+              />
+              <span className="text-gray-600 text-sm">玩家2</span>
+            </div>
+          </div>
         </motion.div>
       </motion.div>
     </motion.div>
