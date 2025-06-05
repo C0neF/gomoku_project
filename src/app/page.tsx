@@ -1,12 +1,71 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowLeft } from '@fortawesome/free-solid-svg-icons';
+import { faArrowLeft, faUsers, faGamepad } from '@fortawesome/free-solid-svg-icons';
+import { WebRTCManager, GameMove, GameState, ConnectionInfo, PlayerReadyState, GameAssignment } from '../lib/webrtc-manager';
 
 // 前置页面组件
-const LobbyPage = ({ onEnterGame }: { onEnterGame: () => void }) => {
+interface LobbyPageProps {
+  onEnterGame: (webrtcManager: WebRTCManager, connectionInfo: ConnectionInfo) => void;
+}
+
+const LobbyPage = ({ onEnterGame }: LobbyPageProps) => {
+  const [webrtcManager] = useState(() => new WebRTCManager());
+  const [roomIdInput, setRoomIdInput] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<string>('');
+  const [showJoinInput, setShowJoinInput] = useState(false);
+
+  // 创建房间
+  const handleCreateRoom = async () => {
+    setIsConnecting(true);
+    setConnectionStatus('正在创建房间...');
+
+    try {
+      const result = await webrtcManager.createRoom();
+      if (result.success && result.roomId) {
+        const connectionInfo = webrtcManager.getConnectionInfo();
+        if (connectionInfo) {
+          onEnterGame(webrtcManager, connectionInfo);
+        }
+      } else {
+        setConnectionStatus(`创建房间失败: ${result.error}`);
+      }
+    } catch (error) {
+      setConnectionStatus('创建房间时发生错误');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  // 加入房间
+  const handleJoinRoom = async () => {
+    if (!roomIdInput.trim()) {
+      setConnectionStatus('请输入房间号');
+      return;
+    }
+
+    setIsConnecting(true);
+    setConnectionStatus('正在加入房间...');
+
+    try {
+      const result = await webrtcManager.joinRoom(roomIdInput.trim());
+      if (result.success) {
+        const connectionInfo = webrtcManager.getConnectionInfo();
+        if (connectionInfo) {
+          onEnterGame(webrtcManager, connectionInfo);
+        }
+      } else {
+        setConnectionStatus(`加入房间失败: ${result.error}`);
+      }
+    } catch (error) {
+      setConnectionStatus('加入房间时发生错误');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
   return (
     <motion.div
       className="min-h-screen flex items-center justify-center p-4"
@@ -49,6 +108,17 @@ const LobbyPage = ({ onEnterGame }: { onEnterGame: () => void }) => {
           选择游戏模式开始对战
         </motion.p>
 
+        {/* 连接状态显示 */}
+        {connectionStatus && (
+          <motion.div
+            className="mb-6 p-3 bg-blue-100 border border-blue-300 rounded-lg text-blue-800 text-sm"
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            {connectionStatus}
+          </motion.div>
+        )}
+
         {/* 按钮组 */}
         <motion.div
           className="flex flex-col gap-6 w-80"
@@ -57,28 +127,73 @@ const LobbyPage = ({ onEnterGame }: { onEnterGame: () => void }) => {
           transition={{ delay: 1, duration: 0.8 }}
         >
           <motion.button
-            onClick={onEnterGame}
-            className="px-8 py-4 bg-green-600 text-white rounded-xl font-semibold text-lg shadow-lg hover:bg-green-500 transition-all duration-300"
-            whileHover={{
+            onClick={handleCreateRoom}
+            disabled={isConnecting}
+            className={`px-8 py-4 text-white rounded-xl font-semibold text-lg shadow-lg transition-all duration-300 ${
+              isConnecting
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-green-600 hover:bg-green-500'
+            }`}
+            whileHover={!isConnecting ? {
               scale: 1.05,
               boxShadow: "0 10px 25px rgba(0,0,0,0.2)"
-            }}
-            whileTap={{ scale: 0.95 }}
+            } : {}}
+            whileTap={!isConnecting ? { scale: 0.95 } : {}}
           >
-            🏠 创建房间
+            <FontAwesomeIcon icon={faUsers} className="mr-2" />
+            {isConnecting ? '创建中...' : '🏠 创建房间'}
           </motion.button>
 
           <motion.button
-            onClick={onEnterGame}
-            className="px-8 py-4 bg-blue-600 text-white rounded-xl font-semibold text-lg shadow-lg hover:bg-blue-500 transition-all duration-300"
-            whileHover={{
+            onClick={() => setShowJoinInput(!showJoinInput)}
+            disabled={isConnecting}
+            className={`px-8 py-4 text-white rounded-xl font-semibold text-lg shadow-lg transition-all duration-300 ${
+              isConnecting
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-500'
+            }`}
+            whileHover={!isConnecting ? {
               scale: 1.05,
               boxShadow: "0 10px 25px rgba(0,0,0,0.2)"
-            }}
-            whileTap={{ scale: 0.95 }}
+            } : {}}
+            whileTap={!isConnecting ? { scale: 0.95 } : {}}
           >
+            <FontAwesomeIcon icon={faGamepad} className="mr-2" />
             🚪 加入房间
           </motion.button>
+
+          {/* 加入房间输入框 */}
+          {showJoinInput && (
+            <motion.div
+              className="flex flex-col gap-3"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              transition={{ duration: 0.3 }}
+            >
+              <input
+                type="text"
+                value={roomIdInput}
+                onChange={(e) => setRoomIdInput(e.target.value.toUpperCase())}
+                placeholder="输入房间号 (例: ABC123)"
+                className="px-4 py-3 border border-gray-300 rounded-lg text-gray-800 text-center font-mono text-lg tracking-wider"
+                maxLength={6}
+                disabled={isConnecting}
+              />
+              <motion.button
+                onClick={handleJoinRoom}
+                disabled={isConnecting || !roomIdInput.trim()}
+                className={`px-6 py-2 text-white rounded-lg font-semibold transition-all duration-300 ${
+                  isConnecting || !roomIdInput.trim()
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+                whileHover={!isConnecting && roomIdInput.trim() ? { scale: 1.02 } : {}}
+                whileTap={!isConnecting && roomIdInput.trim() ? { scale: 0.98 } : {}}
+              >
+                {isConnecting ? '加入中...' : '确认加入'}
+              </motion.button>
+            </motion.div>
+          )}
         </motion.div>
 
 
@@ -87,18 +202,16 @@ const LobbyPage = ({ onEnterGame }: { onEnterGame: () => void }) => {
   );
 };
 
-// 生成随机房间号的函数
-const generateRoomId = (): string => {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-};
+
 
 // 五子棋盘组件
-const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
+interface GomokuBoardProps {
+  onBackToLobby?: () => void;
+  webrtcManager: WebRTCManager;
+  connectionInfo: ConnectionInfo;
+}
+
+const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoardProps) => {
   const boardRef = useRef<HTMLDivElement>(null);
   const cellSize = 40; // 每个格子的尺寸
   const boardSize = cellSize * 14; // 棋盘网格尺寸：14个间隔，15条线
@@ -112,9 +225,98 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
   const [currentPlayer, setCurrentPlayer] = useState<1 | 2>(1); // 1=黑棋先手, 2=白棋
   const [winner, setWinner] = useState<0 | 1 | 2>(0); // 0=无获胜者, 1=黑棋获胜, 2=白棋获胜
   const [winningLine, setWinningLine] = useState<[number, number][]>([]); // 获胜的5个棋子位置
-  const [roomId, setRoomId] = useState<string>(() => generateRoomId()); // 房间号
-  const [player1Online, setPlayer1Online] = useState<boolean>(true); // 玩家1在线状态
-  const [player2Online, setPlayer2Online] = useState<boolean>(false); // 玩家2在线状态
+  const [peerConnected, setPeerConnected] = useState<boolean>(false); // P2P连接状态
+  const [gameStarted, setGameStarted] = useState<boolean>(false); // 游戏是否已开始
+  const [player1Id, setPlayer1Id] = useState<string>(''); // 玩家1的ID
+  const [player2Id, setPlayer2Id] = useState<string>(''); // 玩家2的ID
+  const [myPlayerNumber, setMyPlayerNumber] = useState<1 | 2 | null>(null); // 我的玩家编号
+  const [isMyTurn, setIsMyTurn] = useState<boolean>(false); // 是否轮到我
+  const [myReady, setMyReady] = useState<boolean>(false); // 我的准备状态
+  const [opponentReady, setOpponentReady] = useState<boolean>(false); // 对手准备状态
+
+  // 设置WebRTC回调
+  useEffect(() => {
+    // 监听对手的移动
+    webrtcManager.onGameMove((move: GameMove) => {
+      console.log('收到对手移动:', move);
+      const newBoard = board.map(r => [...r]);
+      newBoard[move.row][move.col] = move.player;
+      setBoard(newBoard);
+
+      // 检查是否获胜
+      const winLine = checkWin(newBoard, move.row, move.col, move.player);
+      if (winLine) {
+        setWinner(move.player);
+        setWinningLine(winLine);
+      } else {
+        setCurrentPlayer(currentPlayer === 1 ? 2 : 1);
+        setIsMyTurn(move.player !== myPlayerNumber);
+      }
+    });
+
+    // 监听游戏状态同步
+    webrtcManager.onGameState((state: GameState) => {
+      console.log('收到游戏状态同步:', state);
+      setBoard(state.board);
+      setCurrentPlayer(state.currentPlayer);
+      setWinner(state.winner);
+      setWinningLine(state.winningLine);
+      setIsMyTurn(myPlayerNumber ? state.currentPlayer === myPlayerNumber : false);
+    });
+
+    // 监听连接状态变化
+    webrtcManager.onConnectionChange((info: ConnectionInfo) => {
+      console.log('连接状态变化:', info);
+      setPeerConnected(info.peerConnected);
+      setMyReady(info.isReady);
+      setOpponentReady(info.opponentReady);
+
+      // 更新玩家编号
+      if (info.gamePlayerNumber) {
+        setMyPlayerNumber(info.gamePlayerNumber);
+        setIsMyTurn(info.gamePlayerNumber === 1); // 玩家1先手
+      }
+    });
+
+    // 监听玩家准备状态
+    webrtcManager.onPlayerReady((readyState: PlayerReadyState) => {
+      console.log('玩家准备状态变化:', readyState);
+      setOpponentReady(readyState.isReady);
+    });
+
+    // 监听游戏分配
+    webrtcManager.onGameAssignment((assignment: GameAssignment) => {
+      console.log('游戏分配:', assignment);
+      setPlayer1Id(assignment.player1Id);
+      setPlayer2Id(assignment.player2Id);
+      setGameStarted(true);
+
+      // 重置游戏状态
+      setBoard(Array(15).fill(null).map(() => Array(15).fill(0)));
+      setCurrentPlayer(1);
+      setWinner(0);
+      setWinningLine([]);
+
+      // 重置准备状态 - 这里是关键修复
+      setMyReady(false);
+      setOpponentReady(false);
+    });
+
+    // 监听错误
+    webrtcManager.onError((error: string) => {
+      console.error('WebRTC错误:', error);
+    });
+
+    return () => {
+      // 清理回调
+      webrtcManager.onGameMove(() => {});
+      webrtcManager.onGameState(() => {});
+      webrtcManager.onConnectionChange(() => {});
+      webrtcManager.onPlayerReady(() => {});
+      webrtcManager.onGameAssignment(() => {});
+      webrtcManager.onError(() => {});
+    };
+  }, [webrtcManager, board, currentPlayer, myPlayerNumber]);
 
   // 检测五子连线
   const checkWin = (board: number[][], row: number, col: number, player: number): [number, number][] | null => {
@@ -163,28 +365,88 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
 
   // 处理棋子放置
   const handlePlacePiece = (row: number, col: number) => {
-    if (board[row][col] !== 0 || winner !== 0) return; // 位置已被占用或游戏已结束
+    // 检查是否可以放置棋子
+    if (board[row][col] !== 0 || winner !== 0 || !isMyTurn || !peerConnected || !gameStarted || !myPlayerNumber) {
+      return;
+    }
 
     const newBoard = board.map(r => [...r]);
-    newBoard[row][col] = currentPlayer;
+    newBoard[row][col] = myPlayerNumber;
     setBoard(newBoard);
 
+    // 创建移动数据
+    const move: GameMove = {
+      row,
+      col,
+      player: myPlayerNumber,
+      timestamp: Date.now()
+    };
+
+    // 发送移动给对手
+    webrtcManager.sendGameMove(move);
+
     // 检查是否获胜
-    const winLine = checkWin(newBoard, row, col, currentPlayer);
+    const winLine = checkWin(newBoard, row, col, myPlayerNumber);
     if (winLine) {
-      setWinner(currentPlayer);
+      setWinner(myPlayerNumber);
       setWinningLine(winLine);
     } else {
-      setCurrentPlayer(currentPlayer === 1 ? 2 : 1); // 切换玩家
+      const nextPlayer = myPlayerNumber === 1 ? 2 : 1;
+      setCurrentPlayer(nextPlayer);
+      setIsMyTurn(false);
     }
   };
 
-  // 重置游戏
-  const resetGame = () => {
-    setBoard(Array(15).fill(null).map(() => Array(15).fill(0)));
-    setCurrentPlayer(1);
-    setWinner(0);
-    setWinningLine([]);
+  // 准备/继续游戏
+  const handleReadyOrContinue = async () => {
+    if (!gameStarted) {
+      // 准备阶段
+      const newReadyState = !myReady;
+      setMyReady(newReadyState);
+      webrtcManager.sendPlayerReady(newReadyState);
+
+      // 如果双方都准备好了，且我是房主，则分配玩家角色
+      if (newReadyState && opponentReady && connectionInfo.playerRole === 'host') {
+        try {
+          const opponentId = await getOpponentId();
+          if (opponentId) {
+            // 随机分配玩家1和玩家2
+            const isHostPlayer1 = Math.random() < 0.5;
+            const player1Id = isHostPlayer1 ? connectionInfo.playerId : opponentId;
+            const player2Id = isHostPlayer1 ? opponentId : connectionInfo.playerId;
+
+            webrtcManager.sendGameAssignment(player1Id, player2Id);
+          }
+        } catch (error) {
+          console.error('分配玩家角色失败:', error);
+        }
+      }
+    } else if (winner !== 0) {
+      // 游戏结束后的继续功能
+      const newReadyState = !myReady;
+      setMyReady(newReadyState);
+      webrtcManager.sendPlayerReady(newReadyState);
+
+      // 如果双方都准备好了，且我是房主，则交换角色并开始新游戏
+      if (newReadyState && opponentReady && connectionInfo.playerRole === 'host') {
+        // 交换玩家1和玩家2的角色
+        const newPlayer1Id = player2Id;
+        const newPlayer2Id = player1Id;
+
+        webrtcManager.sendGameAssignment(newPlayer1Id, newPlayer2Id);
+      }
+    }
+  };
+
+  // 获取对手ID的辅助函数
+  const getOpponentId = async (): Promise<string> => {
+    try {
+      const otherPlayers = await webrtcManager.getOtherPlayersInRoom();
+      return otherPlayers.length > 0 ? otherPlayers[0] : '';
+    } catch (error) {
+      console.error('获取对手ID失败:', error);
+      return '';
+    }
   };
 
   // 创建棋子
@@ -415,6 +677,27 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
         </motion.svg>
       </div>
 
+      {/* 准备/继续按钮 */}
+      <div className="flex justify-center mt-2">
+        <button
+          onClick={handleReadyOrContinue}
+          className={`px-4 py-1 rounded-md transition-all duration-300 text-sm font-medium shadow-md ${
+            myReady
+              ? 'bg-green-600 hover:bg-green-700 text-white shadow-green-200'
+              : 'bg-blue-600 hover:bg-blue-700 text-white'
+          }`}
+          disabled={!peerConnected}
+        >
+          {!gameStarted
+            ? (myReady ? '已准备' : '准备')
+            : (winner !== 0
+                ? (myReady ? '已准备继续' : '继续')
+                : '游戏中'
+              )
+          }
+        </button>
+      </div>
+
       {/* 游戏信息 */}
       <motion.div
         className="text-center mt-4"
@@ -422,67 +705,141 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
         animate={{ opacity: 1 }}
         transition={{ delay: 1, duration: 0.8 }}
       >
-        <div className="flex flex-col items-center gap-3 mb-3">
-          <div className="flex items-center gap-2 h-full">
-            <div
-              className={`w-4 h-4 rounded-full border ${
-                winner === 0
-                  ? (currentPlayer === 1 ? 'bg-black border-black' : 'bg-white border-black')
-                  : (winner === 1 ? 'bg-black border-black' : 'bg-white border-black')
-              }`}
-            />
-            <span
-              className={`font-medium leading-none ${
-                winner === 0
-                  ? 'text-gray-700'
-                  : 'text-yellow-600 font-bold'
-              }`}
-              style={{ fontSize: '16px', lineHeight: '20px' }}
-            >
-              {winner === 0
-                ? `${currentPlayer === 1 ? '玩家1' : '玩家2'}的回合`
-                : `🎉 ${winner === 1 ? '玩家1' : '玩家2'}获胜！`
-              }
-            </span>
-          </div>
-          <button
-            onClick={resetGame}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
-          >
-            准备
-          </button>
-        </div>
-
-        {/* 房间号显示 */}
+        {/* 游戏信息区域 */}
         <motion.div
-          className="mt-3 pt-3 border-t border-gray-400 border-opacity-30"
+          className="pt-2 border-t border-gray-400 border-opacity-30"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 1.5, duration: 0.6 }}
         >
-          <p className="text-gray-600 text-sm">
-            房间号: <span className="font-mono font-semibold text-gray-800">{roomId}</span>
-          </p>
-
-          {/* 玩家指示灯 */}
-          <div className="mt-4 flex justify-center gap-6">
-            <div className="flex items-center gap-2">
-              <div
-                className={`w-3 h-3 rounded-full transition-colors duration-300 ${
-                  player1Online ? 'bg-green-500' : 'bg-gray-400'
-                }`}
-              />
-              <span className="text-gray-600 text-sm">玩家1</span>
+          <div className="flex items-center">
+            {/* 左侧：连接状态 */}
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-2 h-2 rounded-full transition-colors duration-300 ${
+                      connectionInfo.isConnected ? 'bg-green-500' : 'bg-red-500'
+                    }`}
+                  />
+                  <span className="text-gray-600 text-xs">信令连接</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-2 h-2 rounded-full transition-colors duration-300 ${
+                      peerConnected ? 'bg-green-500' : 'bg-yellow-500'
+                    }`}
+                  />
+                  <span className="text-gray-600 text-xs">P2P连接</span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div
-                className={`w-3 h-3 rounded-full transition-colors duration-300 ${
-                  player2Online ? 'bg-green-500' : 'bg-gray-400'
-                }`}
-              />
-              <span className="text-gray-600 text-sm">玩家2</span>
+
+            {/* 中间分割线 */}
+            <div className="w-px h-12 bg-gray-400 bg-opacity-30 mx-3"></div>
+
+            {/* 右侧：玩家状态 */}
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex flex-col gap-2">
+                {!gameStarted ? (
+                  /* 准备阶段显示 */
+                  <>
+                    <div className={`flex items-center gap-2 px-2 py-1 rounded-md border transition-all duration-300 ${
+                      myReady ? 'border-green-400 bg-green-50 shadow-md shadow-green-200' : 'border-gray-300 bg-gray-50'
+                    }`}>
+                      <div className="w-3 h-3 rounded-full bg-blue-500" />
+                      <span className={`font-medium text-xs ${myReady ? 'text-green-700' : 'text-gray-600'}`}>
+                        你 {myReady ? '(已准备)' : '(未准备)'}
+                      </span>
+                    </div>
+                    <div className={`flex items-center gap-2 px-2 py-1 rounded-md border transition-all duration-300 ${
+                      opponentReady ? 'border-green-400 bg-green-50 shadow-md shadow-green-200' : 'border-gray-300 bg-gray-50'
+                    }`}>
+                      <div className="w-3 h-3 rounded-full bg-red-500" />
+                      <span className={`font-medium text-xs ${opponentReady ? 'text-green-700' : 'text-gray-600'}`}>
+                        对手 {opponentReady ? '(已准备)' : '(未准备)'}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  /* 游戏中显示 */
+                  <>
+                    {/* 玩家1 */}
+                    <div className="flex items-center">
+                      <div className="w-4 flex justify-center">
+                        {winner === 1 && <span className="text-yellow-500 text-sm">👑</span>}
+                      </div>
+                      <div
+                        className={`flex items-center gap-2 px-2 py-1 rounded-md border transition-all duration-300 flex-1 ${
+                          winner === 0
+                            ? (currentPlayer === 1
+                                ? 'border-yellow-400 bg-yellow-50 shadow-md shadow-yellow-200'
+                                : 'border-gray-300 bg-gray-50')
+                            : (winner === 1
+                                ? 'border-green-400 bg-green-50 shadow-md shadow-green-200'
+                                : 'border-gray-300 bg-gray-50')
+                        }`}
+                      >
+                        <div className="w-3 h-3 rounded-full bg-black border border-black" />
+                        <span
+                          className={`font-medium text-xs ${
+                            winner === 0
+                              ? (currentPlayer === 1 ? 'text-gray-800' : 'text-gray-600')
+                              : (winner === 1 ? 'text-green-700 font-bold' : 'text-gray-600')
+                          }`}
+                        >
+                          玩家1 {myPlayerNumber === 1 ? '(你)' : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 玩家2 */}
+                    <div className="flex items-center">
+                      <div className="w-4 flex justify-center">
+                        {winner === 2 && <span className="text-yellow-500 text-sm">👑</span>}
+                      </div>
+                      <div
+                        className={`flex items-center gap-2 px-2 py-1 rounded-md border transition-all duration-300 flex-1 ${
+                          winner === 0
+                            ? (currentPlayer === 2
+                                ? 'border-yellow-400 bg-yellow-50 shadow-md shadow-yellow-200'
+                                : 'border-gray-300 bg-gray-50')
+                            : (winner === 2
+                                ? 'border-green-400 bg-green-50 shadow-md shadow-green-200'
+                                : 'border-gray-300 bg-gray-50')
+                        }`}
+                      >
+                        <div className="w-3 h-3 rounded-full bg-white border border-black" />
+                        <span
+                          className={`font-medium text-xs ${
+                            winner === 0
+                              ? (currentPlayer === 2 ? 'text-gray-800' : 'text-gray-600')
+                              : (winner === 2 ? 'text-green-700 font-bold' : 'text-gray-600')
+                          }`}
+                        >
+                          玩家2 {myPlayerNumber === 2 ? '(你)' : ''}
+                        </span>
+                      </div>
+                    </div>
+
+
+                  </>
+                )}
+              </div>
             </div>
           </div>
+        </motion.div>
+
+        {/* 房间号显示 - 最底部 */}
+        <motion.div
+          className="mt-2 pt-2 border-t border-gray-400 border-opacity-30 text-center"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 2, duration: 0.6 }}
+        >
+          <p className="text-gray-600 text-xs">
+            房间号: <span className="font-mono font-semibold text-gray-800">{connectionInfo.roomId}</span>
+          </p>
         </motion.div>
       </motion.div>
     </motion.div>
@@ -491,12 +848,22 @@ const GomokuBoard = ({ onBackToLobby }: { onBackToLobby?: () => void }) => {
 
 export default function Home() {
   const [currentPage, setCurrentPage] = useState<'lobby' | 'game'>('lobby');
+  const [webrtcManager, setWebrtcManager] = useState<WebRTCManager | null>(null);
+  const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
 
-  const handleEnterGame = () => {
+  const handleEnterGame = (manager: WebRTCManager, info: ConnectionInfo) => {
+    setWebrtcManager(manager);
+    setConnectionInfo(info);
     setCurrentPage('game');
   };
 
   const handleBackToLobby = () => {
+    // 断开WebRTC连接
+    if (webrtcManager) {
+      webrtcManager.disconnect();
+    }
+    setWebrtcManager(null);
+    setConnectionInfo(null);
     setCurrentPage('lobby');
   };
 
@@ -504,12 +871,28 @@ export default function Home() {
     return <LobbyPage onEnterGame={handleEnterGame} />;
   }
 
+  if (!webrtcManager || !connectionInfo) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{
+        background: 'linear-gradient(135deg, #F8F6F0 0%, #F0EBDC 50%, #E8E0D0 100%)'
+      }}>
+        <div className="text-center">
+          <p className="text-gray-600">连接信息丢失，正在返回大厅...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={{
       background: 'linear-gradient(135deg, #F8F6F0 0%, #F0EBDC 50%, #E8E0D0 100%)'
     }}>
       <div className="relative">
-        <GomokuBoard onBackToLobby={handleBackToLobby} />
+        <GomokuBoard
+          onBackToLobby={handleBackToLobby}
+          webrtcManager={webrtcManager}
+          connectionInfo={connectionInfo}
+        />
       </div>
     </div>
   );
