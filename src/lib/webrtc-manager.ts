@@ -1,4 +1,4 @@
-import { io, Socket } from 'socket.io-client';
+import { joinRoom } from 'trystero/torrent';
 
 export interface GameMove {
   row: number;
@@ -34,242 +34,239 @@ export interface ConnectionInfo {
   playerRole: 'host' | 'guest';
   isConnected: boolean;
   peerConnected: boolean;
-  gamePlayerNumber?: 1 | 2; // 游戏中的玩家编号
+  gamePlayerNumber?: 1 | 2;
   isReady: boolean;
   opponentReady: boolean;
 }
 
 export class WebRTCManager {
-  private socket: Socket | null = null;
-  private peerConnection: RTCPeerConnection | null = null;
-  private dataChannel: RTCDataChannel | null = null;
+  private room: any = null;
+  private roomId: string = '';
   private connectionInfo: ConnectionInfo | null = null;
+  private selfId: string = '';
+  private opponentPlayerId: string | null = null; // 对手的玩家ID
+  
+  // Trystero actions
+  private sendGameMove: any = null;
+  private sendGameState: any = null;
+  private sendPlayerReady: any = null;
+  private sendGameAssignment: any = null;
   
   // 回调函数
   private onGameMoveCallback?: (move: GameMove) => void;
   private onGameStateCallback?: (state: GameState) => void;
   private onConnectionChangeCallback?: (info: ConnectionInfo) => void;
-  private onErrorCallback?: (error: string) => void;
   private onPlayerReadyCallback?: (readyState: PlayerReadyState) => void;
   private onGameAssignmentCallback?: (assignment: GameAssignment) => void;
+  private onErrorCallback?: (error: string) => void;
 
   constructor() {
-    this.initializeSocket();
+    // 生成唯一的玩家ID
+    this.selfId = this.generatePlayerId();
   }
 
-  // 初始化Socket.IO连接
-  private initializeSocket() {
-    this.socket = io('http://localhost:3000', {
-      transports: ['websocket', 'polling']
+  // 生成玩家ID
+  private generatePlayerId(): string {
+    return 'player_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+  }
+
+  // 生成房间ID
+  private generateRoomId(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
+
+  // 初始化Trystero房间
+  private initializeRoom(roomId: string, isHost: boolean = false) {
+    try {
+      // 使用trystero加入房间
+      this.room = joinRoom(
+        { 
+          appId: 'gomoku-webrtc-game',
+          // 可选：添加TURN服务器配置以提高连接成功率
+          // turnConfig: [
+          //   {
+          //     urls: ['turn:your-turn-server.com:3478'],
+          //     username: 'username',
+          //     credential: 'password'
+          //   }
+          // ]
+        }, 
+        roomId
+      );
+
+      this.roomId = roomId;
+
+      // 设置连接信息
+      this.connectionInfo = {
+        roomId: roomId,
+        playerId: this.selfId,
+        playerRole: isHost ? 'host' : 'guest',
+        isConnected: true,
+        peerConnected: false,
+        isReady: false,
+        opponentReady: false
+      };
+
+      this.setupTrysteroActions();
+      this.setupTrysteroEvents();
+      
+      console.log(`已${isHost ? '创建' : '加入'}房间: ${roomId}`);
+      this.updateConnectionStatus();
+      
+    } catch (error) {
+      console.error('初始化房间失败:', error);
+      this.onErrorCallback?.('初始化房间失败');
+    }
+  }
+
+  // 设置Trystero动作
+  private setupTrysteroActions() {
+    if (!this.room) return;
+
+    // 游戏移动动作 (9字节)
+    const [sendMove, getMove] = this.room.makeAction('move');
+    this.sendGameMove = sendMove;
+    getMove((move: GameMove, peerId: string) => {
+      console.log('收到游戏移动:', move, 'from', peerId);
+      this.onGameMoveCallback?.(move);
     });
 
-    this.socket.on('connect', () => {
-      console.log('Socket.IO连接成功');
+    // 游戏状态动作 (5字节)
+    const [sendState, getState] = this.room.makeAction('state');
+    this.sendGameState = sendState;
+    getState((state: GameState, peerId: string) => {
+      console.log('收到游戏状态:', state, 'from', peerId);
+      this.onGameStateCallback?.(state);
+    });
+
+    // 玩家准备状态动作 (5字节)
+    const [sendReady, getReady] = this.room.makeAction('ready');
+    this.sendPlayerReady = sendReady;
+    getReady((readyState: PlayerReadyState, peerId: string) => {
+      console.log('收到准备状态:', readyState, 'from', peerId);
+      this.handlePlayerReady(readyState);
+    });
+
+    // 游戏分配动作 (6字节)
+    const [sendAssignment, getAssignment] = this.room.makeAction('assign');
+    this.sendGameAssignment = sendAssignment;
+    getAssignment((assignment: GameAssignment, peerId: string) => {
+      console.log('收到游戏分配:', assignment, 'from', peerId);
+      // 总是处理游戏分配，因为房主和客人都需要处理
+      // 在handleGameAssignment中会根据playerId确定角色
+      this.handleGameAssignment(assignment);
+    });
+  }
+
+  // 设置Trystero事件
+  private setupTrysteroEvents() {
+    if (!this.room) return;
+
+    // 监听玩家加入
+    this.room.onPeerJoin((peerId: string) => {
+      console.log('玩家加入:', peerId);
+      // 延迟更新状态，确保连接完全建立
+      setTimeout(() => {
+        this.updateConnectionStatus();
+        // 如果我是房主且有游戏状态，发送当前准备状态给新加入的玩家
+        if (this.connectionInfo?.playerRole === 'host') {
+          this.syncStateToNewPlayer();
+        }
+      }, 1000);
+    });
+
+    // 监听玩家离开
+    this.room.onPeerLeave((peerId: string) => {
+      console.log('玩家离开:', peerId);
       this.updateConnectionStatus();
     });
+  }
 
-    this.socket.on('disconnect', () => {
-      console.log('Socket.IO连接断开');
-      this.updateConnectionStatus();
-    });
-
-    this.socket.on('connect_error', (error) => {
-      console.error('Socket.IO连接错误:', error);
-      this.onErrorCallback?.('连接服务器失败');
-    });
-
-    // WebRTC信令处理
-    this.socket.on('webrtc-offer', this.handleOffer.bind(this));
-    this.socket.on('webrtc-answer', this.handleAnswer.bind(this));
-    this.socket.on('webrtc-ice-candidate', this.handleIceCandidate.bind(this));
-
-    // 房间事件
-    this.socket.on('player-joined', (data) => {
-      console.log('玩家加入:', data);
-      if (this.connectionInfo?.playerRole === 'host' && data.playerCount === 2) {
-        // 房主在第二个玩家加入时发起WebRTC连接
-        this.initiateWebRTCConnection();
-      }
-    });
-
-    this.socket.on('player-left', (data) => {
-      console.log('玩家离开:', data);
-      this.closePeerConnection();
-      this.updateConnectionStatus();
-    });
+  // 向新加入的玩家同步状态
+  private syncStateToNewPlayer() {
+    if (this.connectionInfo && this.sendPlayerReady) {
+      console.log('房主向新玩家同步准备状态:', this.connectionInfo.isReady);
+      const readyState: PlayerReadyState = {
+        playerId: this.connectionInfo.playerId,
+        isReady: this.connectionInfo.isReady,
+        timestamp: Date.now()
+      };
+      // 发送当前准备状态
+      this.sendPlayerReady(readyState);
+    }
   }
 
   // 创建房间
   async createRoom(): Promise<{ success: boolean; roomId?: string; error?: string }> {
-    return new Promise((resolve) => {
-      if (!this.socket) {
-        resolve({ success: false, error: 'Socket连接未建立' });
-        return;
-      }
+    try {
+      const roomId = this.generateRoomId();
+      this.initializeRoom(roomId, true);
 
-      this.socket.emit('create-room', (response: any) => {
-        if (response.success) {
-          this.connectionInfo = {
-            roomId: response.roomId,
-            playerId: response.playerId,
-            playerRole: response.playerRole,
-            isConnected: true,
-            peerConnected: false,
-            isReady: false,
-            opponentReady: false
-          };
-          this.updateConnectionStatus();
-        }
-        resolve(response);
-      });
-    });
+      // 立即更新连接状态，表示房间已创建
+      setTimeout(() => {
+        this.updateConnectionStatus();
+      }, 500);
+
+      return {
+        success: true,
+        roomId: roomId
+      };
+    } catch (error) {
+      console.error('创建房间失败:', error);
+      return {
+        success: false,
+        error: '创建房间失败'
+      };
+    }
   }
 
   // 加入房间
   async joinRoom(roomId: string): Promise<{ success: boolean; error?: string }> {
-    return new Promise((resolve) => {
-      if (!this.socket) {
-        resolve({ success: false, error: 'Socket连接未建立' });
-        return;
-      }
-
-      this.socket.emit('join-room', roomId, (response: any) => {
-        if (response.success) {
-          this.connectionInfo = {
-            roomId: response.roomId,
-            playerId: response.playerId,
-            playerRole: response.playerRole,
-            isConnected: true,
-            peerConnected: false,
-            isReady: false,
-            opponentReady: false
-          };
-          this.updateConnectionStatus();
-        }
-        resolve(response);
-      });
-    });
-  }
-
-  // 发起WebRTC连接（房主调用）
-  private async initiateWebRTCConnection() {
     try {
-      await this.createPeerConnection();
-      
-      // 创建数据通道
-      this.dataChannel = this.peerConnection!.createDataChannel('gameData', {
-        ordered: true
-      });
-      this.setupDataChannel(this.dataChannel);
+      this.initializeRoom(roomId, false);
 
-      // 创建offer
-      const offer = await this.peerConnection!.createOffer();
-      await this.peerConnection!.setLocalDescription(offer);
+      // 立即更新连接状态，表示已加入房间
+      setTimeout(() => {
+        this.updateConnectionStatus();
+      }, 500);
 
-      // 发送offer给对方
-      const targetPlayers = await this.getOtherPlayersInRoom();
-      if (targetPlayers.length > 0) {
-        this.socket?.emit('webrtc-offer', {
-          roomId: this.connectionInfo!.roomId,
-          offer: offer,
-          targetId: targetPlayers[0]
-        });
-      }
+      return {
+        success: true
+      };
     } catch (error) {
-      console.error('发起WebRTC连接失败:', error);
-      this.onErrorCallback?.('WebRTC连接失败');
-    }
-  }
-
-  // 创建RTCPeerConnection
-  private async createPeerConnection() {
-    const configuration: RTCConfiguration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-    };
-
-    this.peerConnection = new RTCPeerConnection(configuration);
-
-    // ICE候选事件
-    this.peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        const targetPlayers = this.getOtherPlayersInRoom();
-        targetPlayers.then(players => {
-          if (players.length > 0) {
-            this.socket?.emit('webrtc-ice-candidate', {
-              roomId: this.connectionInfo!.roomId,
-              candidate: event.candidate,
-              targetId: players[0]
-            });
-          }
-        });
-      }
-    };
-
-    // 连接状态变化
-    this.peerConnection.onconnectionstatechange = () => {
-      console.log('WebRTC连接状态:', this.peerConnection?.connectionState);
-      this.updateConnectionStatus();
-    };
-
-    // 数据通道事件（接收方）
-    this.peerConnection.ondatachannel = (event) => {
-      const channel = event.channel;
-      this.setupDataChannel(channel);
-    };
-  }
-
-  // 设置数据通道
-  private setupDataChannel(channel: RTCDataChannel) {
-    this.dataChannel = channel;
-
-    channel.onopen = () => {
-      console.log('数据通道已打开');
-      this.updateConnectionStatus();
-    };
-
-    channel.onclose = () => {
-      console.log('数据通道已关闭');
-      this.updateConnectionStatus();
-    };
-
-    channel.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        this.handleDataChannelMessage(data);
-      } catch (error) {
-        console.error('解析数据通道消息失败:', error);
-      }
-    };
-  }
-
-  // 处理数据通道消息
-  private handleDataChannelMessage(data: any) {
-    switch (data.type) {
-      case 'game-move':
-        this.onGameMoveCallback?.(data.payload);
-        break;
-      case 'game-state':
-        this.onGameStateCallback?.(data.payload);
-        break;
-      case 'player-ready':
-        this.handlePlayerReady(data.payload);
-        break;
-      case 'game-assignment':
-        this.handleGameAssignment(data.payload);
-        break;
-      default:
-        console.log('未知数据通道消息类型:', data.type);
+      console.error('加入房间失败:', error);
+      return {
+        success: false,
+        error: '加入房间失败'
+      };
     }
   }
 
   // 处理玩家准备状态
   private handlePlayerReady(readyState: PlayerReadyState) {
     if (this.connectionInfo) {
-      this.connectionInfo.opponentReady = readyState.isReady;
-      this.updateConnectionStatus();
+      // 只有当准备状态来自对手时才更新本地状态
+      if (readyState.playerId !== this.connectionInfo.playerId) {
+        console.log('更新对手准备状态 (WebRTC管理器):', readyState.isReady);
+        this.connectionInfo.opponentReady = readyState.isReady;
+
+        // 记录对手的玩家ID
+        if (!this.opponentPlayerId) {
+          this.opponentPlayerId = readyState.playerId;
+          console.log('记录对手玩家ID:', this.opponentPlayerId);
+        }
+
+        this.updateConnectionStatus();
+      } else {
+        console.log('忽略自己的准备状态 (WebRTC管理器)');
+      }
+
+      // 总是触发回调，让前端组件自己判断
       this.onPlayerReadyCallback?.(readyState);
     }
   }
@@ -277,11 +274,26 @@ export class WebRTCManager {
   // 处理游戏分配
   private handleGameAssignment(assignment: GameAssignment) {
     if (this.connectionInfo) {
+      console.log('处理游戏分配 (WebRTC管理器):', {
+        myPlayerId: this.connectionInfo.playerId,
+        player1Id: assignment.player1Id,
+        player2Id: assignment.player2Id,
+        assignment
+      });
+
       // 确定当前玩家的游戏编号
       if (this.connectionInfo.playerId === assignment.player1Id) {
         this.connectionInfo.gamePlayerNumber = 1;
+        console.log('我被分配为玩家1');
       } else if (this.connectionInfo.playerId === assignment.player2Id) {
         this.connectionInfo.gamePlayerNumber = 2;
+        console.log('我被分配为玩家2');
+      } else {
+        console.warn('我的ID不在分配中！', {
+          myId: this.connectionInfo.playerId,
+          player1Id: assignment.player1Id,
+          player2Id: assignment.player2Id
+        });
       }
 
       // 重置准备状态
@@ -293,180 +305,112 @@ export class WebRTCManager {
     }
   }
 
-  // 处理WebRTC offer
-  private async handleOffer(data: { offer: RTCSessionDescriptionInit; senderId: string }) {
-    try {
-      await this.createPeerConnection();
-      await this.peerConnection!.setRemoteDescription(data.offer);
-
-      // 创建answer
-      const answer = await this.peerConnection!.createAnswer();
-      await this.peerConnection!.setLocalDescription(answer);
-
-      // 发送answer
-      this.socket?.emit('webrtc-answer', {
-        roomId: this.connectionInfo!.roomId,
-        answer: answer,
-        targetId: data.senderId
-      });
-    } catch (error) {
-      console.error('处理WebRTC offer失败:', error);
-      this.onErrorCallback?.('处理连接请求失败');
-    }
-  }
-
-  // 处理WebRTC answer
-  private async handleAnswer(data: { answer: RTCSessionDescriptionInit; senderId: string }) {
-    try {
-      await this.peerConnection!.setRemoteDescription(data.answer);
-    } catch (error) {
-      console.error('处理WebRTC answer失败:', error);
-      this.onErrorCallback?.('处理连接响应失败');
-    }
-  }
-
-  // 处理ICE候选
-  private async handleIceCandidate(data: { candidate: RTCIceCandidateInit; senderId: string }) {
-    try {
-      await this.peerConnection!.addIceCandidate(data.candidate);
-    } catch (error) {
-      console.error('添加ICE候选失败:', error);
-    }
-  }
-
   // 发送游戏移动
-  sendGameMove(move: GameMove) {
-    if (this.dataChannel && this.dataChannel.readyState === 'open') {
-      this.dataChannel.send(JSON.stringify({
-        type: 'game-move',
-        payload: move
-      }));
+  sendMove(move: GameMove) {
+    if (this.sendGameMove) {
+      this.sendGameMove(move);
     }
   }
 
   // 发送游戏状态
-  sendGameState(state: GameState) {
-    if (this.dataChannel && this.dataChannel.readyState === 'open') {
-      this.dataChannel.send(JSON.stringify({
-        type: 'game-state',
-        payload: state
-      }));
+  sendState(state: GameState) {
+    if (this.sendGameState) {
+      this.sendGameState(state);
     }
   }
 
   // 发送玩家准备状态
-  sendPlayerReady(isReady: boolean) {
+  sendReady(isReady: boolean) {
     if (this.connectionInfo) {
       this.connectionInfo.isReady = isReady;
       this.updateConnectionStatus();
 
-      if (this.dataChannel && this.dataChannel.readyState === 'open') {
+      if (this.sendPlayerReady) {
         const readyState: PlayerReadyState = {
           playerId: this.connectionInfo.playerId,
           isReady: isReady,
           timestamp: Date.now()
         };
 
-        this.dataChannel.send(JSON.stringify({
-          type: 'player-ready',
-          payload: readyState
-        }));
+        this.sendPlayerReady(readyState);
       }
     }
   }
 
   // 发送游戏分配（仅房主调用）
-  sendGameAssignment(player1Id: string, player2Id: string) {
-    if (this.dataChannel && this.dataChannel.readyState === 'open') {
+  sendAssignment(player1Id: string, player2Id: string) {
+    if (this.sendGameAssignment) {
       const assignment: GameAssignment = {
         player1Id,
         player2Id,
-        player1Role: 'host', // 玩家1总是房主角色
-        player2Role: 'guest', // 玩家2总是客人角色
+        player1Role: 'host',
+        player2Role: 'guest',
         timestamp: Date.now()
       };
 
-      // 设置自己的游戏编号和重置准备状态
-      if (this.connectionInfo) {
-        if (this.connectionInfo.playerId === player1Id) {
-          this.connectionInfo.gamePlayerNumber = 1;
-        } else {
-          this.connectionInfo.gamePlayerNumber = 2;
-        }
+      console.log('房主发送游戏分配:', assignment);
 
-        // 重置准备状态
-        this.connectionInfo.isReady = false;
-        this.connectionInfo.opponentReady = false;
+      // 发送给其他对等方
+      this.sendGameAssignment(assignment);
 
-        this.updateConnectionStatus();
-      }
-
-      this.dataChannel.send(JSON.stringify({
-        type: 'game-assignment',
-        payload: assignment
-      }));
-
-      this.onGameAssignmentCallback?.(assignment);
+      // 房主也需要处理自己的分配，因为Trystero不会发送给自己
+      console.log('房主处理自己的游戏分配');
+      this.handleGameAssignment(assignment);
     }
   }
 
   // 获取房间内其他玩家
   async getOtherPlayersInRoom(): Promise<string[]> {
-    return new Promise((resolve) => {
-      if (!this.socket || !this.connectionInfo) {
-        resolve([]);
-        return;
-      }
+    if (!this.room) return [];
 
-      this.socket.emit('get-room-players', this.connectionInfo.roomId, (response: any) => {
-        if (response.success) {
-          resolve(response.players);
-        } else {
-          resolve([]);
-        }
-      });
-    });
+    // 如果已经记录了对手的玩家ID，直接返回
+    if (this.opponentPlayerId) {
+      console.log('返回已记录的对手玩家ID:', [this.opponentPlayerId]);
+      return [this.opponentPlayerId];
+    }
+
+    // 否则返回空数组，等待对手发送准备状态时记录ID
+    const peers = this.room.getPeers();
+    const peerIds = Object.keys(peers);
+    console.log('获取房间内其他玩家 (Trystero peer IDs):', peerIds);
+    console.log('警告：尚未记录对手玩家ID，返回空数组');
+    return [];
   }
 
   // 更新连接状态
   private updateConnectionStatus() {
     if (this.connectionInfo) {
-      this.connectionInfo.isConnected = this.socket?.connected || false;
-      this.connectionInfo.peerConnected = 
-        this.peerConnection?.connectionState === 'connected' &&
-        this.dataChannel?.readyState === 'open';
-      
-      this.onConnectionChangeCallback?.(this.connectionInfo);
-    }
-  }
+      this.connectionInfo.isConnected = !!this.room;
 
-  // 关闭P2P连接
-  private closePeerConnection() {
-    if (this.dataChannel) {
-      this.dataChannel.close();
-      this.dataChannel = null;
-    }
-    
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
+      // 检查是否有P2P连接
+      const peers = this.room ? this.room.getPeers() : {};
+      const peerIds = Object.keys(peers);
+      this.connectionInfo.peerConnected = peerIds.length > 0;
+
+      console.log('连接状态更新:', {
+        isConnected: this.connectionInfo.isConnected,
+        peerConnected: this.connectionInfo.peerConnected,
+        peerCount: peerIds.length,
+        peers: peerIds
+      });
+
+      this.onConnectionChangeCallback?.(this.connectionInfo);
     }
   }
 
   // 离开房间
   leaveRoom() {
-    if (this.connectionInfo) {
-      this.socket?.emit('leave-room', this.connectionInfo.roomId);
-      this.closePeerConnection();
-      this.connectionInfo = null;
-      this.updateConnectionStatus();
+    if (this.room) {
+      this.room.leave();
+      this.room = null;
     }
+    this.connectionInfo = null;
+    this.updateConnectionStatus();
   }
 
   // 断开连接
   disconnect() {
     this.leaveRoom();
-    this.socket?.disconnect();
   }
 
   // 设置回调函数
@@ -497,5 +441,10 @@ export class WebRTCManager {
   // 获取连接信息
   getConnectionInfo(): ConnectionInfo | null {
     return this.connectionInfo;
+  }
+
+  // 获取自己的ID
+  getSelfId(): string {
+    return this.selfId;
   }
 }

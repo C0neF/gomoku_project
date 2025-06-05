@@ -234,24 +234,55 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
   const [myReady, setMyReady] = useState<boolean>(false); // 我的准备状态
   const [opponentReady, setOpponentReady] = useState<boolean>(false); // 对手准备状态
 
+  // 组件初始化时重置游戏状态
+  useEffect(() => {
+    console.log('GameBoard组件初始化，重置游戏状态');
+    // 确保游戏状态被正确初始化
+    setGameStarted(false);
+    setMyPlayerNumber(null);
+    setPlayer1Id('');
+    setPlayer2Id('');
+    setWinner(0);
+    setWinningLine([]);
+    setBoard(Array(15).fill(null).map(() => Array(15).fill(0)));
+    setCurrentPlayer(1);
+    setIsMyTurn(false);
+    setMyReady(false);
+    setOpponentReady(false);
+  }, []); // 只在组件挂载时执行一次
+
   // 设置WebRTC回调
   useEffect(() => {
     // 监听对手的移动
     webrtcManager.onGameMove((move: GameMove) => {
       console.log('收到对手移动:', move);
-      const newBoard = board.map(r => [...r]);
-      newBoard[move.row][move.col] = move.player;
-      setBoard(newBoard);
 
-      // 检查是否获胜
-      const winLine = checkWin(newBoard, move.row, move.col, move.player);
-      if (winLine) {
-        setWinner(move.player);
-        setWinningLine(winLine);
-      } else {
-        setCurrentPlayer(currentPlayer === 1 ? 2 : 1);
-        setIsMyTurn(move.player !== myPlayerNumber);
-      }
+      // 使用函数式更新确保基于最新的棋盘状态
+      setBoard(prevBoard => {
+        const newBoard = prevBoard.map(r => [...r]);
+        newBoard[move.row][move.col] = move.player;
+
+        console.log('更新棋盘状态:', {
+          move,
+          prevBoardState: prevBoard.map(row => row.filter(cell => cell !== 0).length).reduce((a, b) => a + b, 0),
+          newBoardState: newBoard.map(row => row.filter(cell => cell !== 0).length).reduce((a, b) => a + b, 0)
+        });
+
+        // 检查是否获胜
+        const winLine = checkWin(newBoard, move.row, move.col, move.player);
+        if (winLine) {
+          setWinner(move.player);
+          setWinningLine(winLine);
+        } else {
+          // 更新当前玩家为下一个玩家
+          const nextPlayer = move.player === 1 ? 2 : 1;
+          setCurrentPlayer(nextPlayer);
+          // 现在轮到我了（因为对手刚下完）
+          setIsMyTurn(true);
+        }
+
+        return newBoard;
+      });
     });
 
     // 监听游戏状态同步
@@ -273,15 +304,92 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
 
       // 更新玩家编号
       if (info.gamePlayerNumber) {
+        console.log('从连接信息更新玩家编号:', info.gamePlayerNumber);
         setMyPlayerNumber(info.gamePlayerNumber);
         setIsMyTurn(info.gamePlayerNumber === 1); // 玩家1先手
       }
+
+      // 记录当前游戏状态
+      console.log('当前游戏状态:', {
+        gameStarted,
+        myPlayerNumber,
+        peerConnected: info.peerConnected,
+        myReady: info.isReady,
+        opponentReady: info.opponentReady
+      });
     });
 
     // 监听玩家准备状态
     webrtcManager.onPlayerReady((readyState: PlayerReadyState) => {
       console.log('玩家准备状态变化:', readyState);
-      setOpponentReady(readyState.isReady);
+      // 只有当准备状态来自对手时才更新
+      if (readyState.playerId !== connectionInfo.playerId) {
+        console.log('更新对手准备状态:', readyState.isReady);
+        setOpponentReady(readyState.isReady);
+
+        // 获取WebRTC管理器的当前连接信息，使用同步状态
+        const currentConnectionInfo = webrtcManager.getConnectionInfo();
+        const myCurrentReady = currentConnectionInfo?.isReady || false;
+
+        console.log('准备状态检查:', {
+          opponentReady: readyState.isReady,
+          myReady: myCurrentReady,
+          isHost: connectionInfo.playerRole === 'host',
+          gameStarted,
+          winner
+        });
+
+        // 如果对手准备好了，且我也准备好了，且我是房主，则开始游戏
+        if (readyState.isReady && myCurrentReady && connectionInfo.playerRole === 'host') {
+          if (!gameStarted) {
+            // 第一次游戏开始
+            console.log('双方都准备好了，房主开始分配角色');
+            setTimeout(async () => {
+              try {
+                const opponentId = await getOpponentId();
+                console.log('获取到的对手ID:', opponentId);
+                console.log('我的玩家ID:', connectionInfo.playerId);
+
+                if (opponentId) {
+                  const isHostPlayer1 = Math.random() < 0.5;
+                  const player1Id = isHostPlayer1 ? connectionInfo.playerId : opponentId;
+                  const player2Id = isHostPlayer1 ? opponentId : connectionInfo.playerId;
+
+                  console.log('自动分配玩家角色:', {
+                    player1Id,
+                    player2Id,
+                    isHostPlayer1,
+                    myId: connectionInfo.playerId,
+                    opponentId
+                  });
+                  webrtcManager.sendAssignment(player1Id, player2Id);
+                } else {
+                  console.error('无法获取对手ID，分配失败');
+                }
+              } catch (error) {
+                console.error('自动分配玩家角色失败:', error);
+              }
+            }, 500);
+          } else if (winner !== 0) {
+            // 继续游戏 - 交换角色
+            console.log('双方都准备好了，房主交换角色并开始新游戏');
+            setTimeout(() => {
+              const newPlayer1Id = player2Id;
+              const newPlayer2Id = player1Id;
+
+              console.log('自动交换角色并开始新游戏:', {
+                oldPlayer1Id: player1Id.slice(-8),
+                oldPlayer2Id: player2Id.slice(-8),
+                newPlayer1Id: newPlayer1Id.slice(-8),
+                newPlayer2Id: newPlayer2Id.slice(-8)
+              });
+              webrtcManager.sendAssignment(newPlayer1Id, newPlayer2Id);
+            }, 500);
+          }
+        }
+      } else {
+        console.log('忽略自己的准备状态回调');
+      }
     });
 
     // 监听游戏分配
@@ -291,13 +399,28 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
       setPlayer2Id(assignment.player2Id);
       setGameStarted(true);
 
+      // 确定我的玩家编号
+      const myNumber = assignment.player1Id === connectionInfo.playerId ? 1 : 2;
+      setMyPlayerNumber(myNumber);
+
+      // 设置回合状态 - 玩家1先手
+      setIsMyTurn(myNumber === 1);
+
+      console.log('玩家编号分配:', {
+        myPlayerId: connectionInfo.playerId,
+        player1Id: assignment.player1Id,
+        player2Id: assignment.player2Id,
+        myPlayerNumber: myNumber,
+        isMyTurn: myNumber === 1
+      });
+
       // 重置游戏状态
       setBoard(Array(15).fill(null).map(() => Array(15).fill(0)));
       setCurrentPlayer(1);
       setWinner(0);
       setWinningLine([]);
 
-      // 重置准备状态 - 这里是关键修复
+      // 重置准备状态
       setMyReady(false);
       setOpponentReady(false);
     });
@@ -316,7 +439,7 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
       webrtcManager.onGameAssignment(() => {});
       webrtcManager.onError(() => {});
     };
-  }, [webrtcManager, board, currentPlayer, myPlayerNumber]);
+  }, [webrtcManager, connectionInfo.playerId]); // 只依赖webrtcManager和playerId
 
   // 检测五子连线
   const checkWin = (board: number[][], row: number, col: number, player: number): [number, number][] | null => {
@@ -365,8 +488,19 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
 
   // 处理棋子放置
   const handlePlacePiece = (row: number, col: number) => {
-    // 检查是否可以放置棋子
-    if (board[row][col] !== 0 || winner !== 0 || !isMyTurn || !peerConnected || !gameStarted || !myPlayerNumber) {
+    console.log('尝试落子:', {
+      row, col,
+      boardEmpty: board[row][col] === 0,
+      noWinner: winner === 0,
+      isMyTurn,
+      gameStarted,
+      myPlayerNumber,
+      currentPlayer
+    });
+
+    // 检查是否可以放置棋子 - 移除P2P连接要求
+    if (board[row][col] !== 0 || winner !== 0 || !isMyTurn || !gameStarted || !myPlayerNumber) {
+      console.log('落子被阻止，条件检查失败');
       return;
     }
 
@@ -383,7 +517,7 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
     };
 
     // 发送移动给对手
-    webrtcManager.sendGameMove(move);
+    webrtcManager.sendMove(move);
 
     // 检查是否获胜
     const winLine = checkWin(newBoard, row, col, myPlayerNumber);
@@ -399,42 +533,66 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
 
   // 准备/继续游戏
   const handleReadyOrContinue = async () => {
+    console.log('准备按钮点击:', {
+      gameStarted,
+      myReady,
+      opponentReady,
+      playerRole: connectionInfo.playerRole,
+      peerConnected
+    });
+
     if (!gameStarted) {
       // 准备阶段
       const newReadyState = !myReady;
       setMyReady(newReadyState);
-      webrtcManager.sendPlayerReady(newReadyState);
+      webrtcManager.sendReady(newReadyState);
 
-      // 如果双方都准备好了，且我是房主，则分配玩家角色
-      if (newReadyState && opponentReady && connectionInfo.playerRole === 'host') {
-        try {
-          const opponentId = await getOpponentId();
-          if (opponentId) {
-            // 随机分配玩家1和玩家2
-            const isHostPlayer1 = Math.random() < 0.5;
-            const player1Id = isHostPlayer1 ? connectionInfo.playerId : opponentId;
-            const player2Id = isHostPlayer1 ? opponentId : connectionInfo.playerId;
+      console.log('发送准备状态:', newReadyState);
 
-            webrtcManager.sendGameAssignment(player1Id, player2Id);
-          }
-        } catch (error) {
-          console.error('分配玩家角色失败:', error);
-        }
-      }
+      // 移除延迟检查机制，避免重复分配角色
+      // 现在只依赖自动检测机制（在准备状态变化回调中）
     } else if (winner !== 0) {
       // 游戏结束后的继续功能
       const newReadyState = !myReady;
       setMyReady(newReadyState);
-      webrtcManager.sendPlayerReady(newReadyState);
+      webrtcManager.sendReady(newReadyState);
 
-      // 如果双方都准备好了，且我是房主，则交换角色并开始新游戏
-      if (newReadyState && opponentReady && connectionInfo.playerRole === 'host') {
-        // 交换玩家1和玩家2的角色
-        const newPlayer1Id = player2Id;
-        const newPlayer2Id = player1Id;
+      console.log('继续游戏 - 发送准备状态:', {
+        newReadyState,
+        opponentReady,
+        isHost: connectionInfo.playerRole === 'host',
+        currentPlayer1Id: player1Id.slice(-8),
+        currentPlayer2Id: player2Id.slice(-8)
+      });
 
-        webrtcManager.sendGameAssignment(newPlayer1Id, newPlayer2Id);
-      }
+      // 延迟检查双方准备状态（备用机制）
+      setTimeout(async () => {
+        // 获取WebRTC管理器的当前连接信息，使用同步状态
+        const currentConnectionInfo = webrtcManager.getConnectionInfo();
+        const myCurrentReady = currentConnectionInfo?.isReady || false;
+        const opponentCurrentReady = currentConnectionInfo?.opponentReady || false;
+
+        console.log('继续游戏 - 延迟检查准备状态:', {
+          myCurrentReady,
+          opponentCurrentReady,
+          isHost: connectionInfo.playerRole === 'host'
+        });
+
+        // 如果双方都准备好了，且我是房主，则交换角色并开始新游戏
+        if (myCurrentReady && opponentCurrentReady && connectionInfo.playerRole === 'host') {
+          // 交换玩家1和玩家2的角色
+          const newPlayer1Id = player2Id;
+          const newPlayer2Id = player1Id;
+
+          console.log('延迟检查 - 交换角色并开始新游戏:', {
+            oldPlayer1Id: player1Id.slice(-8),
+            oldPlayer2Id: player2Id.slice(-8),
+            newPlayer1Id: newPlayer1Id.slice(-8),
+            newPlayer2Id: newPlayer2Id.slice(-8)
+          });
+          webrtcManager.sendAssignment(newPlayer1Id, newPlayer2Id);
+        }
+      }, 1000);
     }
   };
 
@@ -682,17 +840,22 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
         <button
           onClick={handleReadyOrContinue}
           className={`px-4 py-1 rounded-md transition-all duration-300 text-sm font-medium shadow-md ${
-            myReady
-              ? 'bg-green-600 hover:bg-green-700 text-white shadow-green-200'
-              : 'bg-blue-600 hover:bg-blue-700 text-white'
+            !connectionInfo.isConnected
+              ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+              : myReady
+                ? 'bg-green-600 hover:bg-green-700 text-white shadow-green-200'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
           }`}
-          disabled={!peerConnected}
+          disabled={!connectionInfo.isConnected}
         >
-          {!gameStarted
-            ? (myReady ? '已准备' : '准备')
-            : (winner !== 0
-                ? (myReady ? '已准备继续' : '继续')
-                : '游戏中'
+          {!connectionInfo.isConnected
+            ? '连接中...'
+            : (!gameStarted
+                ? (myReady ? '已准备' : '准备')
+                : (winner !== 0
+                    ? (myReady ? '已准备继续' : '继续')
+                    : '游戏中'
+                  )
               )
           }
         </button>
@@ -713,24 +876,20 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
           transition={{ delay: 1.5, duration: 0.6 }}
         >
           <div className="flex items-center">
-            {/* 左侧：连接状态 */}
+            {/* 左侧：状态信息 */}
             <div className="flex-1 flex items-center justify-center">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-2 h-2 rounded-full transition-colors duration-300 ${
-                      connectionInfo.isConnected ? 'bg-green-500' : 'bg-red-500'
-                    }`}
-                  />
-                  <span className="text-gray-600 text-xs">信令连接</span>
+              <div className="flex flex-col gap-y-1 text-xs text-gray-600">
+                {/* 第一行 */}
+                <div className="flex gap-x-8">
+                  <span>信令连接: {connectionInfo.isConnected ? '✅' : '❌'}</span>
+                  <span>我的准备: {myReady ? '✅' : '❌'}</span>
+                  <span>玩家1ID: {player1Id.slice(-8) || '未分配'}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-2 h-2 rounded-full transition-colors duration-300 ${
-                      peerConnected ? 'bg-green-500' : 'bg-yellow-500'
-                    }`}
-                  />
-                  <span className="text-gray-600 text-xs">P2P连接</span>
+                {/* 第二行 */}
+                <div className="flex gap-x-8">
+                  <span>P2P连接: {peerConnected ? '✅' : '❌'}</span>
+                  <span>对手准备: {opponentReady ? '✅' : '❌'}</span>
+                  <span>玩家2ID: {player2Id.slice(-8) || '未分配'}</span>
                 </div>
               </div>
             </div>
@@ -840,6 +999,8 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
           <p className="text-gray-600 text-xs">
             房间号: <span className="font-mono font-semibold text-gray-800">{connectionInfo.roomId}</span>
           </p>
+
+
         </motion.div>
       </motion.div>
     </motion.div>

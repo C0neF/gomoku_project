@@ -18,8 +18,7 @@
 - **动画库**: Framer Motion 12.16.0
 - **样式框架**: TailwindCSS 4.1.8
 - **图标库**: Font Awesome 6.7.2
-- **实时通信**: Socket.IO 4.8.1
-- **P2P连接**: WebRTC
+- **实时通信**: 纯WebRTC + Trystero 0.21
 - **开发语言**: TypeScript 5.8.3
 
 ## 快速开始
@@ -37,6 +36,8 @@ npm run dev
 ```
 
 打开 [http://localhost:3000](http://localhost:3000) 查看应用。
+
+**注意**: 现在项目使用纯WebRTC技术，无需启动服务器，完全去中心化运行。
 
 ### 生产环境部署
 
@@ -69,13 +70,11 @@ npm start
 gomoku_project/
 ├── src/
 │   ├── app/
-│   │   ├── api/socket/route.ts    # Socket.IO API路由（备用）
 │   │   ├── globals.css            # 全局样式
 │   │   ├── layout.tsx             # 应用布局
 │   │   └── page.tsx               # 主页面组件
 │   └── lib/
-│       └── webrtc-manager.ts      # WebRTC连接管理器
-├── server.js                      # Socket.IO服务器
+│       └── webrtc-manager.ts      # 纯WebRTC连接管理器
 ├── package.json                   # 项目配置
 └── README.md                      # 项目文档
 ```
@@ -83,9 +82,9 @@ gomoku_project/
 ## 核心组件
 
 ### WebRTCManager
-负责管理 WebRTC 连接和游戏数据同步：
-- Socket.IO 信令服务器连接
-- WebRTC P2P 连接建立
+负责管理纯WebRTC连接和游戏数据同步：
+- 使用Trystero进行去中心化P2P连接
+- 无需信令服务器的WebRTC连接建立
 - 游戏移动和状态同步
 - 连接状态管理
 
@@ -105,8 +104,7 @@ gomoku_project/
 ## 开发说明
 
 ### 脚本命令
-- `npm run dev`: 启动开发服务器（包含Socket.IO）
-- `npm run dev:next`: 仅启动Next.js开发服务器
+- `npm run dev`: 启动Next.js开发服务器
 - `npm run build`: 构建生产版本
 - `npm run start`: 启动生产服务器
 - `npm run lint`: 代码检查
@@ -114,15 +112,14 @@ gomoku_project/
 ### 技术实现
 
 #### WebRTC连接流程
-1. 玩家通过Socket.IO连接到信令服务器
+1. 玩家使用Trystero加入去中心化房间
 2. 房主创建房间，客人加入房间
-3. 房主发起WebRTC连接（创建offer）
-4. 客人响应连接（创建answer）
-5. 交换ICE候选，建立P2P连接
-6. 通过数据通道同步游戏状态
+3. Trystero自动处理WebRTC信令交换
+4. 建立直接的P2P连接
+5. 通过Trystero的action系统同步游戏状态
 
 #### 游戏状态同步
-- 使用WebRTC数据通道传输游戏移动
+- 使用Trystero的action系统传输游戏移动
 - 实时同步棋盘状态和回合信息
 - 自动处理连接断开和重连
 
@@ -138,8 +135,8 @@ npm run dev
 
 ### 生产部署
 1. 构建项目：`npm run build`
-2. 启动服务器：`npm start`
-3. 确保服务器支持WebSocket连接
+2. 部署静态文件：`npm start` 或部署到任何静态文件托管服务
+3. 无需服务器配置，完全静态部署
 
 ## 故障排除
 
