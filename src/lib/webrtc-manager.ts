@@ -1,4 +1,5 @@
 import { joinRoom } from 'trystero/torrent';
+import { CryptoCompatibility, type CryptoCompatibilityResult } from './crypto-compatibility';
 
 export interface GameMove {
   row: number;
@@ -63,6 +64,30 @@ export class WebRTCManager {
   constructor() {
     // 生成唯一的玩家ID
     this.selfId = this.generatePlayerId();
+
+    // 检查加密兼容性
+    this.checkCryptoCompatibility();
+  }
+
+  // 检查加密兼容性
+  private checkCryptoCompatibility() {
+    try {
+      const compatibility = CryptoCompatibility.checkCompatibility();
+
+      if (!compatibility.isSupported) {
+        console.warn('Web Crypto API 兼容性问题:', compatibility);
+        console.warn(CryptoCompatibility.generateCompatibilityReport());
+
+        // 触发错误回调，但不阻止初始化
+        setTimeout(() => {
+          this.onErrorCallback?.(`浏览器兼容性问题: ${compatibility.missingFeatures.join(', ')}`);
+        }, 100);
+      } else {
+        console.log('Web Crypto API 兼容性检查通过');
+      }
+    } catch (error) {
+      console.error('兼容性检查失败:', error);
+    }
   }
 
   // 生成玩家ID
@@ -83,9 +108,25 @@ export class WebRTCManager {
   // 初始化Trystero房间
   private initializeRoom(roomId: string, isHost: boolean = false) {
     try {
+      // 检查兼容性
+      const compatibility = CryptoCompatibility.checkCompatibility();
+      if (!compatibility.isSupported) {
+        const errorMsg = `浏览器不支持所需功能: ${compatibility.missingFeatures.join(', ')}`;
+        console.error(errorMsg);
+        console.error('兼容性报告:', CryptoCompatibility.generateCompatibilityReport());
+        throw new Error(errorMsg);
+      }
+
+      // 检查安全上下文
+      if (!CryptoCompatibility.isSecureContext()) {
+        const errorMsg = '需要安全上下文 (HTTPS) 才能使用 Web Crypto API';
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       // 使用trystero加入房间
       this.room = joinRoom(
-        { 
+        {
           appId: 'gomoku-webrtc-game',
           // 可选：添加TURN服务器配置以提高连接成功率
           // turnConfig: [
@@ -95,7 +136,7 @@ export class WebRTCManager {
           //     credential: 'password'
           //   }
           // ]
-        }, 
+        },
         roomId
       );
 
@@ -114,13 +155,27 @@ export class WebRTCManager {
 
       this.setupTrysteroActions();
       this.setupTrysteroEvents();
-      
+
       console.log(`已${isHost ? '创建' : '加入'}房间: ${roomId}`);
       this.updateConnectionStatus();
-      
+
     } catch (error) {
       console.error('初始化房间失败:', error);
-      this.onErrorCallback?.('初始化房间失败');
+
+      // 提供更详细的错误信息
+      let errorMessage = '初始化房间失败';
+      if (error instanceof Error) {
+        if (error.message.includes('crypto') || error.message.includes('digest') || error.message.includes('importKey')) {
+          errorMessage = '浏览器不支持所需的加密功能，请使用现代浏览器并确保使用 HTTPS 访问';
+        } else if (error.message.includes('安全上下文')) {
+          errorMessage = '需要使用 HTTPS 协议访问，或在 localhost 环境下运行';
+        } else {
+          errorMessage = `初始化失败: ${error.message}`;
+        }
+      }
+
+      this.onErrorCallback?.(errorMessage);
+      throw error;
     }
   }
 
@@ -128,63 +183,101 @@ export class WebRTCManager {
   private setupTrysteroActions() {
     if (!this.room) return;
 
-    // 游戏移动动作 (9字节)
-    const [sendMove, getMove] = this.room.makeAction('move');
-    this.sendGameMove = sendMove;
-    getMove((move: GameMove, peerId: string) => {
-      console.log('收到游戏移动:', move, 'from', peerId);
-      this.onGameMoveCallback?.(move);
-    });
+    try {
+      // 游戏移动动作 (9字节)
+      const [sendMove, getMove] = this.room.makeAction('move');
+      this.sendGameMove = sendMove;
+      getMove((move: GameMove, peerId: string) => {
+        try {
+          console.log('收到游戏移动:', move, 'from', peerId);
+          this.onGameMoveCallback?.(move);
+        } catch (error) {
+          console.error('处理游戏移动时出错:', error);
+        }
+      });
 
-    // 游戏状态动作 (5字节)
-    const [sendState, getState] = this.room.makeAction('state');
-    this.sendGameState = sendState;
-    getState((state: GameState, peerId: string) => {
-      console.log('收到游戏状态:', state, 'from', peerId);
-      this.onGameStateCallback?.(state);
-    });
+      // 游戏状态动作 (5字节)
+      const [sendState, getState] = this.room.makeAction('state');
+      this.sendGameState = sendState;
+      getState((state: GameState, peerId: string) => {
+        try {
+          console.log('收到游戏状态:', state, 'from', peerId);
+          this.onGameStateCallback?.(state);
+        } catch (error) {
+          console.error('处理游戏状态时出错:', error);
+        }
+      });
 
-    // 玩家准备状态动作 (5字节)
-    const [sendReady, getReady] = this.room.makeAction('ready');
-    this.sendPlayerReady = sendReady;
-    getReady((readyState: PlayerReadyState, peerId: string) => {
-      console.log('收到准备状态:', readyState, 'from', peerId);
-      this.handlePlayerReady(readyState);
-    });
+      // 玩家准备状态动作 (5字节)
+      const [sendReady, getReady] = this.room.makeAction('ready');
+      this.sendPlayerReady = sendReady;
+      getReady((readyState: PlayerReadyState, peerId: string) => {
+        try {
+          console.log('收到准备状态:', readyState, 'from', peerId);
+          this.handlePlayerReady(readyState);
+        } catch (error) {
+          console.error('处理准备状态时出错:', error);
+        }
+      });
 
-    // 游戏分配动作 (6字节)
-    const [sendAssignment, getAssignment] = this.room.makeAction('assign');
-    this.sendGameAssignment = sendAssignment;
-    getAssignment((assignment: GameAssignment, peerId: string) => {
-      console.log('收到游戏分配:', assignment, 'from', peerId);
-      // 总是处理游戏分配，因为房主和客人都需要处理
-      // 在handleGameAssignment中会根据playerId确定角色
-      this.handleGameAssignment(assignment);
-    });
+      // 游戏分配动作 (6字节)
+      const [sendAssignment, getAssignment] = this.room.makeAction('assign');
+      this.sendGameAssignment = sendAssignment;
+      getAssignment((assignment: GameAssignment, peerId: string) => {
+        try {
+          console.log('收到游戏分配:', assignment, 'from', peerId);
+          // 总是处理游戏分配，因为房主和客人都需要处理
+          // 在handleGameAssignment中会根据playerId确定角色
+          this.handleGameAssignment(assignment);
+        } catch (error) {
+          console.error('处理游戏分配时出错:', error);
+        }
+      });
+    } catch (error) {
+      console.error('设置Trystero动作时出错:', error);
+      this.onErrorCallback?.('设置网络连接失败');
+    }
   }
 
   // 设置Trystero事件
   private setupTrysteroEvents() {
     if (!this.room) return;
 
-    // 监听玩家加入
-    this.room.onPeerJoin((peerId: string) => {
-      console.log('玩家加入:', peerId);
-      // 延迟更新状态，确保连接完全建立
-      setTimeout(() => {
-        this.updateConnectionStatus();
-        // 如果我是房主且有游戏状态，发送当前准备状态给新加入的玩家
-        if (this.connectionInfo?.playerRole === 'host') {
-          this.syncStateToNewPlayer();
+    try {
+      // 监听玩家加入
+      this.room.onPeerJoin((peerId: string) => {
+        try {
+          console.log('玩家加入:', peerId);
+          // 延迟更新状态，确保连接完全建立
+          setTimeout(() => {
+            try {
+              this.updateConnectionStatus();
+              // 如果我是房主且有游戏状态，发送当前准备状态给新加入的玩家
+              if (this.connectionInfo?.playerRole === 'host') {
+                this.syncStateToNewPlayer();
+              }
+            } catch (error) {
+              console.error('处理玩家加入状态更新时出错:', error);
+            }
+          }, 1000);
+        } catch (error) {
+          console.error('处理玩家加入事件时出错:', error);
         }
-      }, 1000);
-    });
+      });
 
-    // 监听玩家离开
-    this.room.onPeerLeave((peerId: string) => {
-      console.log('玩家离开:', peerId);
-      this.updateConnectionStatus();
-    });
+      // 监听玩家离开
+      this.room.onPeerLeave((peerId: string) => {
+        try {
+          console.log('玩家离开:', peerId);
+          this.updateConnectionStatus();
+        } catch (error) {
+          console.error('处理玩家离开事件时出错:', error);
+        }
+      });
+    } catch (error) {
+      console.error('设置Trystero事件监听器时出错:', error);
+      this.onErrorCallback?.('设置网络事件监听失败');
+    }
   }
 
   // 向新加入的玩家同步状态
@@ -369,11 +462,26 @@ export class WebRTCManager {
       return [this.opponentPlayerId];
     }
 
-    // 否则返回空数组，等待对手发送准备状态时记录ID
+    // 尝试从当前连接的peers中获取对手ID
     const peers = this.room.getPeers();
     const peerIds = Object.keys(peers);
     console.log('获取房间内其他玩家 (Trystero peer IDs):', peerIds);
-    console.log('警告：尚未记录对手玩家ID，返回空数组');
+
+    if (peerIds.length > 0) {
+      // 如果有连接的peer，使用第一个作为对手ID
+      const opponentId = peerIds[0];
+      console.log('从连接的peers中获取对手ID:', opponentId);
+
+      // 记录对手ID以备后用
+      if (!this.opponentPlayerId) {
+        this.opponentPlayerId = opponentId;
+        console.log('记录对手玩家ID (从peers):', this.opponentPlayerId);
+      }
+
+      return [opponentId];
+    }
+
+    console.log('警告：没有找到连接的对手');
     return [];
   }
 

@@ -3,6 +3,21 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* 移动端适配变量 */
+  --mobile-padding: 1rem;
+  --tablet-padding: 2rem;
+  --desktop-padding: 3rem;
+
+  /* 棋盘尺寸变量 */
+  --cell-size-mobile: 24px;
+  --cell-size-tablet: 32px;
+  --cell-size-desktop: 40px;
+
+  /* 按钮尺寸变量 */
+  --button-height-mobile: 48px;
+  --button-height-tablet: 56px;
+  --button-height-desktop: 64px;
 }
 
 @theme inline {
@@ -23,4 +38,128 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  /* 移动端优化 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 移动端基础样式 */
+* {
+  box-sizing: border-box;
+}
+
+/* 防止移动端缩放 */
+html {
+  -webkit-text-size-adjust: 100%;
+  -ms-text-size-adjust: 100%;
+}
+
+/* 触摸优化 */
+button, [role="button"] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 响应式断点 */
+@media (max-width: 640px) {
+  :root {
+    --current-padding: var(--mobile-padding);
+    --current-cell-size: var(--cell-size-mobile);
+    --current-button-height: var(--button-height-mobile);
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  :root {
+    --current-padding: var(--tablet-padding);
+    --current-cell-size: var(--cell-size-tablet);
+    --current-button-height: var(--button-height-tablet);
+  }
+}
+
+@media (min-width: 1025px) {
+  :root {
+    --current-padding: var(--desktop-padding);
+    --current-cell-size: var(--cell-size-desktop);
+    --current-button-height: var(--button-height-desktop);
+  }
+}
+
+/* 移动端触摸优化 */
+@media (max-width: 1024px) {
+  /* 增大触摸目标 */
+  button, [role="button"], .cursor-pointer {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* 优化触摸反馈 */
+  button:active, [role="button"]:active {
+    transform: scale(0.95);
+    transition: transform 0.1s ease;
+  }
+
+  /* 防止双击缩放 */
+  * {
+    touch-action: manipulation;
+  }
+
+  /* 优化滚动 */
+  body {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}
+
+/* 横屏适配 */
+@media (max-height: 600px) and (orientation: landscape) {
+  .min-h-screen {
+    min-height: 100vh;
+    padding: 0.5rem;
+  }
+}
+
+/* 超小屏幕优化 */
+@media (max-width: 360px) {
+  :root {
+    --mobile-padding: 0.5rem;
+    --cell-size-mobile: 18px;
+    --button-height-mobile: 44px;
+  }
+}
+
+/* 性能优化 */
+@media (max-width: 1024px) {
+  /* 减少移动端动画复杂度 */
+  * {
+    will-change: auto;
+  }
+
+  /* 优化渲染性能 */
+  .motion-reduce {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 减少动画偏好设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 高对比度模式支持 */
+@media (prefers-contrast: high) {
+  button, [role="button"] {
+    border: 2px solid currentColor;
+  }
 }
