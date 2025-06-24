@@ -1003,8 +1003,8 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
           setTouchPreview({row, col});
 
           // 设置触摸反馈
-          e.currentTarget.style.fill = '#E8E0D0';
-          e.currentTarget.style.fillOpacity = '0.8';
+          (e.currentTarget as SVGCircleElement).style.fill = '#E8E0D0';
+          (e.currentTarget as SVGCircleElement).style.fillOpacity = '0.8';
 
           // 手机端：长按确认机制（500ms后自动确认）
           if (isMobile) {
@@ -1020,8 +1020,8 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
           e.preventDefault();
 
           // 清除触摸反馈
-          e.currentTarget.style.fill = 'transparent';
-          e.currentTarget.style.fillOpacity = '1';
+          (e.currentTarget as SVGCircleElement).style.fill = 'transparent';
+          (e.currentTarget as SVGCircleElement).style.fillOpacity = '1';
 
           // 清除超时
           if (touchConfirmTimeout) {
@@ -1064,14 +1064,14 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
             }}
             onMouseEnter={(e) => {
               if (!isMobile) {
-                e.currentTarget.style.fill = '#E8E0D0';
-                e.currentTarget.style.fillOpacity = '0.6';
+                (e.currentTarget as SVGCircleElement).style.fill = '#E8E0D0';
+                (e.currentTarget as SVGCircleElement).style.fillOpacity = '0.6';
               }
             }}
             onMouseLeave={(e) => {
               if (!isMobile) {
-                e.currentTarget.style.fill = 'transparent';
-                e.currentTarget.style.fillOpacity = '1';
+                (e.currentTarget as SVGCircleElement).style.fill = 'transparent';
+                (e.currentTarget as SVGCircleElement).style.fillOpacity = '1';
               }
             }}
             // 优化的移动端触摸处理
