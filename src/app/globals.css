@@ -10,7 +10,7 @@
   --desktop-padding: 3rem;
 
   /* 棋盘尺寸变量 */
-  --cell-size-mobile: 24px;
+  --cell-size-mobile: 28px;
   --cell-size-tablet: 32px;
   --cell-size-desktop: 40px;
 
@@ -95,6 +95,19 @@ button, [role="button"] {
     min-width: 44px;
   }
 
+  /* 准备按钮特殊处理 - 允许更小的高度 */
+  .prepare-button {
+    min-height: 28px !important;
+  }
+
+  /* 返回按钮特殊处理 - 允许更小的尺寸 */
+  .back-button {
+    min-height: 24px !important;
+    min-width: 24px !important;
+    width: 24px !important;
+    height: 24px !important;
+  }
+
   /* 优化触摸反馈 */
   button:active, [role="button"]:active {
     transform: scale(0.95);
@@ -125,7 +138,7 @@ button, [role="button"] {
 @media (max-width: 360px) {
   :root {
     --mobile-padding: 0.5rem;
-    --cell-size-mobile: 18px;
+    --cell-size-mobile: 22px;
     --button-height-mobile: 44px;
   }
 }

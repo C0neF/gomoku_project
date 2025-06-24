@@ -3,7 +3,7 @@
 import { motion } from 'framer-motion';
 import { useRef, useState, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowLeft, faUsers, faGamepad, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
+import { faArrowLeft, faUsers, faGamepad, faExclamationTriangle, faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
 import { WebRTCManager, GameMove, GameState, ConnectionInfo, PlayerReadyState, GameAssignment } from '../lib/webrtc-manager';
 import { checkCryptoSupport, generateCryptoReport } from '../lib/crypto-compatibility';
 
@@ -18,6 +18,7 @@ const LobbyPage = ({ onEnterGame }: LobbyPageProps) => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<string>('');
   const [showJoinInput, setShowJoinInput] = useState(false);
+  const [autoJoining, setAutoJoining] = useState(false);
   const [cryptoCompatibility, setCryptoCompatibility] = useState<any>(null);
 
   // 检查浏览器兼容性
@@ -31,6 +32,48 @@ const LobbyPage = ({ onEnterGame }: LobbyPageProps) => {
       setConnectionStatus(`浏览器兼容性问题: ${compatibility.missingFeatures.slice(0, 2).join(', ')}`);
     }
   }, []);
+
+  // 检查URL参数并自动加入房间
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
+
+    if (roomParam && roomParam.length === 6) {
+      console.log('检测到房间参数:', roomParam);
+      setRoomIdInput(roomParam.toUpperCase());
+      setShowJoinInput(true);
+      setAutoJoining(true);
+
+      // 自动尝试加入房间
+      const autoJoin = async () => {
+        setIsConnecting(true);
+        setConnectionStatus('正在自动加入房间...');
+
+        try {
+          const result = await webrtcManager.joinRoom(roomParam.toUpperCase());
+          if (result.success) {
+            const connectionInfo = webrtcManager.getConnectionInfo();
+            if (connectionInfo) {
+              // 清除URL参数
+              window.history.replaceState({}, document.title, window.location.pathname);
+              onEnterGame(webrtcManager, connectionInfo);
+            }
+          } else {
+            setConnectionStatus(`自动加入房间失败: ${result.error}`);
+            setAutoJoining(false);
+          }
+        } catch (error) {
+          setConnectionStatus('自动加入房间时发生错误');
+          setAutoJoining(false);
+        } finally {
+          setIsConnecting(false);
+        }
+      };
+
+      // 延迟一点时间让UI渲染完成
+      setTimeout(autoJoin, 500);
+    }
+  }, [webrtcManager, onEnterGame]);
 
   // 创建房间
   const handleCreateRoom = async () => {
@@ -150,12 +193,14 @@ const LobbyPage = ({ onEnterGame }: LobbyPageProps) => {
             className={`mb-4 sm:mb-6 p-2 sm:p-3 rounded-lg text-xs sm:text-sm ${
               connectionStatus.includes('兼容性') || connectionStatus.includes('失败') || connectionStatus.includes('错误')
                 ? 'bg-red-100 border border-red-300 text-red-800'
-                : 'bg-blue-100 border border-blue-300 text-blue-800'
+                : autoJoining
+                  ? 'bg-green-100 border border-green-300 text-green-800'
+                  : 'bg-blue-100 border border-blue-300 text-blue-800'
             }`}
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
           >
-            {connectionStatus}
+            {autoJoining && '🔗 '}{connectionStatus}
           </motion.div>
         )}
 
@@ -284,7 +329,7 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
     if (width <= 640) {
       // 手机端：根据可用空间计算最佳尺寸
       const maxCellSize = Math.min(availableWidth, availableHeight) / 16;
-      return Math.max(16, Math.min(24, maxCellSize));
+      return Math.max(16, Math.min(28, maxCellSize));
     } else if (width <= 1024) {
       // 平板端
       const maxCellSize = Math.min(availableWidth, availableHeight) / 16;
@@ -316,6 +361,12 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
   const [myReady, setMyReady] = useState<boolean>(false); // 我的准备状态
   const [opponentReady, setOpponentReady] = useState<boolean>(false); // 对手准备状态
 
+  // 移动端方向键控制状态
+  const [ghostPosition, setGhostPosition] = useState<{row: number, col: number} | null>(null);
+
+  // 复制链接状态
+  const [copySuccess, setCopySuccess] = useState<boolean>(false);
+
   // 组件初始化时重置游戏状态
   useEffect(() => {
     console.log('GameBoard组件初始化，重置游戏状态');
@@ -331,7 +382,196 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
     setIsMyTurn(false);
     setMyReady(false);
     setOpponentReady(false);
+    // 重置方向键状态
+    setGhostPosition(null);
   }, []); // 只在组件挂载时执行一次
+
+  // 查找最近的空位置
+  const findNearestEmptyPosition = (startRow: number, startCol: number): {row: number, col: number} | null => {
+    // 如果起始位置为空，直接返回
+    if (board[startRow][startCol] === 0) {
+      return {row: startRow, col: startCol};
+    }
+
+    // 使用广度优先搜索找到最近的空位置
+    const queue: {row: number, col: number, distance: number}[] = [];
+    const visited = new Set<string>();
+
+    queue.push({row: startRow, col: startCol, distance: 0});
+    visited.add(`${startRow}-${startCol}`);
+
+    while (queue.length > 0) {
+      const {row, col, distance} = queue.shift()!;
+
+      // 检查8个方向
+      const directions = [
+        [-1, -1], [-1, 0], [-1, 1],
+        [0, -1],           [0, 1],
+        [1, -1],  [1, 0],  [1, 1]
+      ];
+
+      for (const [dr, dc] of directions) {
+        const newRow = row + dr;
+        const newCol = col + dc;
+        const key = `${newRow}-${newCol}`;
+
+        // 检查边界
+        if (newRow >= 0 && newRow < 15 && newCol >= 0 && newCol < 15 && !visited.has(key)) {
+          visited.add(key);
+
+          // 如果找到空位置，返回
+          if (board[newRow][newCol] === 0) {
+            return {row: newRow, col: newCol};
+          }
+
+          // 继续搜索
+          queue.push({row: newRow, col: newCol, distance: distance + 1});
+        }
+      }
+    }
+
+    return null; // 没有找到空位置
+  };
+
+  // 初始化移动端方向键控制
+  useEffect(() => {
+    const isMobile = windowSize.width <= 640;
+    if (isMobile && gameStarted && isMyTurn && winner === 0 && !ghostPosition) {
+      // 在移动端且轮到我时，初始化虚影棋子位置到棋盘中心或最近的空位置
+      const emptyPosition = findNearestEmptyPosition(7, 7);
+      if (emptyPosition) {
+        setGhostPosition(emptyPosition);
+      }
+    } else if (!isMobile || !gameStarted || !isMyTurn || winner !== 0) {
+      // 非移动端或非我的回合时，清除虚影棋子
+      setGhostPosition(null);
+    }
+  }, [windowSize.width, gameStarted, isMyTurn, winner, ghostPosition, board]);
+
+  // 检查虚影棋子位置是否被占用，如果被占用则移动到最近的空位置
+  useEffect(() => {
+    if (ghostPosition && board[ghostPosition.row][ghostPosition.col] !== 0) {
+      // 当前虚影位置被占用，寻找最近的空位置
+      const emptyPosition = findNearestEmptyPosition(ghostPosition.row, ghostPosition.col);
+      if (emptyPosition) {
+        setGhostPosition(emptyPosition);
+      } else {
+        // 如果没有空位置，清除虚影棋子
+        setGhostPosition(null);
+      }
+    }
+  }, [board, ghostPosition]);
+
+  // 方向按键控制函数
+  const handleDirectionMove = (direction: 'up' | 'down' | 'left' | 'right') => {
+    if (!ghostPosition || !gameStarted || !isMyTurn || winner !== 0) return;
+
+    let newRow = ghostPosition.row;
+    let newCol = ghostPosition.col;
+
+    // 根据方向调整位置
+    switch (direction) {
+      case 'up':
+        newRow = Math.max(0, ghostPosition.row - 1);
+        break;
+      case 'down':
+        newRow = Math.min(14, ghostPosition.row + 1);
+        break;
+      case 'left':
+        newCol = Math.max(0, ghostPosition.col - 1);
+        break;
+      case 'right':
+        newCol = Math.min(14, ghostPosition.col + 1);
+        break;
+    }
+
+    // 检查新位置是否为空
+    if (board[newRow][newCol] === 0) {
+      setGhostPosition({row: newRow, col: newCol});
+    } else {
+      // 如果目标位置被占用，尝试在该方向上继续寻找空位置
+      let searchRow = newRow;
+      let searchCol = newCol;
+
+      // 在同一方向上继续搜索空位置
+      for (let i = 0; i < 15; i++) {
+        switch (direction) {
+          case 'up':
+            searchRow = Math.max(0, searchRow - 1);
+            break;
+          case 'down':
+            searchRow = Math.min(14, searchRow + 1);
+            break;
+          case 'left':
+            searchCol = Math.max(0, searchCol - 1);
+            break;
+          case 'right':
+            searchCol = Math.min(14, searchCol + 1);
+            break;
+        }
+
+        // 如果到达边界，停止搜索
+        if ((direction === 'up' && searchRow === 0) ||
+            (direction === 'down' && searchRow === 14) ||
+            (direction === 'left' && searchCol === 0) ||
+            (direction === 'right' && searchCol === 14)) {
+          break;
+        }
+
+        // 如果找到空位置，移动到该位置
+        if (board[searchRow][searchCol] === 0) {
+          setGhostPosition({row: searchRow, col: searchCol});
+          break;
+        }
+      }
+    }
+  };
+
+  // 确认落子
+  const handleConfirmPlacement = () => {
+    if (!ghostPosition || !gameStarted || !isMyTurn || winner !== 0) return;
+
+    const {row, col} = ghostPosition;
+    if (board[row][col] === 0) {
+      handlePlacePiece(row, col);
+      setGhostPosition(null);
+    }
+  };
+
+  // 复制房间链接
+  const handleCopyRoomLink = async () => {
+    try {
+      const currentUrl = window.location.origin + window.location.pathname;
+      const roomLink = `${currentUrl}?room=${connectionInfo.roomId}`;
+
+      await navigator.clipboard.writeText(roomLink);
+      setCopySuccess(true);
+
+      // 2秒后重置复制状态
+      setTimeout(() => {
+        setCopySuccess(false);
+      }, 2000);
+    } catch (error) {
+      console.error('复制失败:', error);
+      // 降级方案：使用传统的复制方法
+      try {
+        const textArea = document.createElement('textarea');
+        const currentUrl = window.location.origin + window.location.pathname;
+        const roomLink = `${currentUrl}?room=${connectionInfo.roomId}`;
+        textArea.value = roomLink;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        setCopySuccess(true);
+        setTimeout(() => {
+          setCopySuccess(false);
+        }, 2000);
+      } catch (fallbackError) {
+        console.error('降级复制也失败:', fallbackError);
+      }
+    }
+  };
 
   // 设置WebRTC回调
   useEffect(() => {
@@ -668,6 +908,13 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
     });
 
     if (!gameStarted) {
+      // 检查是否应该手动开始游戏（双方都准备好了但游戏未开始）
+      if (myReady && opponentReady && connectionInfo.playerRole === 'host') {
+        console.log('双方都已准备，房主点击手动开始游戏');
+        await handleManualStartGame();
+        return;
+      }
+
       // 准备阶段
       const newReadyState = !myReady;
       setMyReady(newReadyState);
@@ -888,6 +1135,40 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
       );
     }
 
+    // 添加虚影棋子（移动端摇杆控制）
+    if (ghostPosition && windowSize.width <= 640 && gameStarted && isMyTurn && winner === 0 && myPlayerNumber) {
+      const x = ghostPosition.col * cellSize + padding;
+      const y = ghostPosition.row * cellSize + padding;
+      const isBlack = myPlayerNumber === 1;
+      const pieceRadius = Math.max(8, cellSize * 0.35);
+
+      pieces.push(
+        <motion.circle
+          key="ghost-piece"
+          cx={x}
+          cy={y}
+          r={pieceRadius}
+          fill={isBlack ? "black" : "white"}
+          stroke={isBlack ? "#666" : "black"}
+          strokeWidth={Math.max(1, cellSize * 0.025)}
+          opacity={0.5}
+          initial={{ scale: 0.8, opacity: 0.3 }}
+          animate={{
+            scale: [0.8, 1, 0.8],
+            opacity: [0.3, 0.6, 0.3]
+          }}
+          transition={{
+            duration: 1.5,
+            repeat: Infinity,
+            ease: "easeInOut"
+          }}
+          style={{
+            filter: "drop-shadow(1px 1px 2px rgba(0,0,0,0.2))"
+          }}
+        />
+      );
+    }
+
     return pieces;
   };
 
@@ -1034,6 +1315,11 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
         };
 
         const handleClick = (row: number, col: number) => {
+          // 如果摇杆模式激活，禁用传统点击
+          if (isMobile && ghostPosition) {
+            return;
+          }
+
           // 桌面端直接点击，手机端需要双击确认
           if (isMobile) {
             // 手机端双击确认
@@ -1115,14 +1401,14 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
         {onBackToLobby && (
           <motion.button
             onClick={onBackToLobby}
-            className="absolute left-0 w-8 h-8 sm:w-10 sm:h-10 bg-gray-600 text-white rounded-full hover:bg-gray-700 active:bg-gray-800 transition-colors flex items-center justify-center shadow-lg"
+            className="back-button absolute left-0 w-6 h-6 sm:w-10 sm:h-10 bg-gray-600 text-white rounded-full hover:bg-gray-700 active:bg-gray-800 transition-colors flex items-center justify-center shadow-lg"
             initial={{ opacity: 0, scale: 0 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 1.5, duration: 0.3 }}
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
           >
-            <FontAwesomeIcon icon={faArrowLeft} className="text-sm sm:text-lg" />
+            <FontAwesomeIcon icon={faArrowLeft} className="text-xs sm:text-lg" />
           </motion.button>
         )}
 
@@ -1166,61 +1452,129 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
         >
-          <div className="bg-blue-100 border border-blue-300 rounded-lg px-3 py-1 text-xs text-blue-800 text-center">
-            {touchPreview
-              ? "再次点击确认落子，或长按0.5秒自动确认"
-              : "点击棋盘交叉点落子"
-            }
-          </div>
+          {touchPreview && (
+            <div className="bg-blue-100 border border-blue-300 rounded-lg px-3 py-1 text-xs text-blue-800 text-center">
+              再次点击确认落子，或长按0.5秒自动确认
+            </div>
+          )}
         </motion.div>
       )}
 
-      {/* 准备/继续按钮 */}
-      <div className="flex justify-center mt-2 gap-2">
-        <button
-          onClick={handleReadyOrContinue}
-          className={`px-3 sm:px-4 py-1 sm:py-2 rounded-md transition-all duration-300 text-xs sm:text-sm font-medium shadow-md min-h-[32px] sm:min-h-[36px] ${
-            !connectionInfo.isConnected
-              ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-              : myReady
-                ? 'bg-green-600 hover:bg-green-700 active:bg-green-800 text-white shadow-green-200'
-                : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white'
-          }`}
-          disabled={!connectionInfo.isConnected}
-        >
-          {!connectionInfo.isConnected
-            ? '连接中...'
-            : (!gameStarted
-                ? (myReady ? '已准备' : '准备')
-                : (winner !== 0
-                    ? (myReady ? '已准备继续' : '继续')
-                    : '游戏中'
-                  )
-              )
-          }
-        </button>
-
-        {/* 调试：手动开始游戏按钮 */}
-        {!gameStarted && myReady && opponentReady && connectionInfo.playerRole === 'host' && (
+      {/* 准备/继续按钮 - 移动端方向键激活时隐藏 */}
+      {!(windowSize.width <= 640 && gameStarted && isMyTurn && winner === 0 && ghostPosition) && (
+        <div className="flex justify-center mt-2 gap-2">
           <button
-            onClick={handleManualStartGame}
-            className="px-2 sm:px-3 py-1 sm:py-2 rounded-md transition-all duration-300 text-xs font-medium shadow-md min-h-[32px] sm:min-h-[36px] bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white"
-            title="双方都准备好了但游戏未开始，点击手动开始"
+            onClick={handleReadyOrContinue}
+            className={`prepare-button px-3 sm:px-4 py-1 sm:py-2 rounded-md transition-all duration-300 text-xs sm:text-sm font-medium shadow-md min-h-[28px] sm:min-h-[36px] ${
+              !connectionInfo.isConnected
+                ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                : myReady
+                  ? 'bg-green-600 hover:bg-green-700 active:bg-green-800 text-white shadow-green-200'
+                  : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white'
+            }`}
+            disabled={!connectionInfo.isConnected}
           >
-            🚀 手动开始
+            {!connectionInfo.isConnected
+              ? '连接中...'
+              : (!gameStarted
+                  ? (myReady && opponentReady && connectionInfo.playerRole === 'host'
+                      ? '🚀 开始游戏'
+                      : (myReady ? '已准备' : '准备')
+                    )
+                  : (winner !== 0
+                      ? (myReady ? '已准备继续' : '继续')
+                      : '游戏中'
+                    )
+                )
+            }
           </button>
-        )}
 
 
-      </div>
+        </div>
+      )}
 
-      {/* 游戏信息 */}
-      <motion.div
-        className="text-center mt-2 sm:mt-4"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 1, duration: 0.8 }}
-      >
+      {/* 移动端方向按键控制区域 */}
+      {windowSize.width <= 640 && gameStarted && isMyTurn && winner === 0 && ghostPosition ? (
+        <motion.div
+          className="text-center mt-2 sm:mt-4"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 20 }}
+          transition={{ duration: 0.3 }}
+        >
+          <div className="flex justify-center">
+            {/* 方向按键布局 */}
+            <div className="flex flex-col items-center gap-2">
+              {/* 上方向键 */}
+              <motion.button
+                className="w-12 h-12 rounded-lg bg-blue-500 text-white shadow-lg flex items-center justify-center text-lg font-bold"
+                onTouchStart={(e) => e.preventDefault()}
+                onClick={() => handleDirectionMove('up')}
+                whileTap={{ scale: 0.9 }}
+                whileHover={{ scale: 1.05 }}
+              >
+                ↑
+              </motion.button>
+
+              {/* 中间行：左、确认、右 */}
+              <div className="flex items-center gap-2">
+                {/* 左方向键 */}
+                <motion.button
+                  className="w-12 h-12 rounded-lg bg-blue-500 text-white shadow-lg flex items-center justify-center text-lg font-bold"
+                  onTouchStart={(e) => e.preventDefault()}
+                  onClick={() => handleDirectionMove('left')}
+                  whileTap={{ scale: 0.9 }}
+                  whileHover={{ scale: 1.05 }}
+                >
+                  ←
+                </motion.button>
+
+                {/* 确认按键 */}
+                <motion.button
+                  className="w-12 h-12 rounded-lg bg-green-500 text-white shadow-lg flex items-center justify-center text-lg font-bold"
+                  onTouchStart={(e) => e.preventDefault()}
+                  onClick={handleConfirmPlacement}
+                  whileTap={{ scale: 0.9 }}
+                  whileHover={{ scale: 1.05 }}
+                >
+                  ✓
+                </motion.button>
+
+                {/* 右方向键 */}
+                <motion.button
+                  className="w-12 h-12 rounded-lg bg-blue-500 text-white shadow-lg flex items-center justify-center text-lg font-bold"
+                  onTouchStart={(e) => e.preventDefault()}
+                  onClick={() => handleDirectionMove('right')}
+                  whileTap={{ scale: 0.9 }}
+                  whileHover={{ scale: 1.05 }}
+                >
+                  →
+                </motion.button>
+              </div>
+
+              {/* 下方向键 */}
+              <motion.button
+                className="w-12 h-12 rounded-lg bg-blue-500 text-white shadow-lg flex items-center justify-center text-lg font-bold"
+                onTouchStart={(e) => e.preventDefault()}
+                onClick={() => handleDirectionMove('down')}
+                whileTap={{ scale: 0.9 }}
+                whileHover={{ scale: 1.05 }}
+              >
+                ↓
+              </motion.button>
+            </div>
+          </div>
+
+
+        </motion.div>
+      ) : (
+        /* 游戏信息 */
+        <motion.div
+          className="text-center mt-2 sm:mt-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1, duration: 0.8 }}
+        >
         {/* 游戏信息区域 */}
         <motion.div
           className="pt-2 border-t border-gray-400 border-opacity-30"
@@ -1384,13 +1738,36 @@ const GomokuBoard = ({ onBackToLobby, webrtcManager, connectionInfo }: GomokuBoa
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 2, duration: 0.6 }}
         >
-          <p className="text-gray-600 text-xs">
-            房间号: <span className="font-mono font-semibold text-gray-800">{connectionInfo.roomId}</span>
-          </p>
+          <div className="flex items-center justify-center gap-2">
+            <p className="text-gray-600 text-xs">
+              房间号: <span className="font-mono font-semibold text-gray-800">{connectionInfo.roomId}</span>
+            </p>
+
+            {/* 房主显示复制按钮 */}
+            {connectionInfo.playerRole === 'host' && (
+              <motion.button
+                onClick={handleCopyRoomLink}
+                className={`flex items-center justify-center w-6 h-6 rounded transition-all duration-200 ${
+                  copySuccess
+                    ? 'bg-green-100 text-green-600'
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800'
+                }`}
+                title={copySuccess ? "链接已复制!" : "复制房间链接"}
+                whileTap={{ scale: 0.9 }}
+                whileHover={{ scale: 1.1 }}
+              >
+                <FontAwesomeIcon
+                  icon={copySuccess ? faCheck : faCopy}
+                  className="text-xs"
+                />
+              </motion.button>
+            )}
+          </div>
 
 
         </motion.div>
       </motion.div>
+      )}
     </motion.div>
   );
 };
@@ -1433,15 +1810,17 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-2 sm:p-4" style={{
+    <div className="min-h-screen w-full flex flex-col" style={{
       background: 'linear-gradient(135deg, #F8F6F0 0%, #F0EBDC 50%, #E8E0D0 100%)'
     }}>
-      <div className="w-full max-w-6xl">
-        <GomokuBoard
-          onBackToLobby={handleBackToLobby}
-          webrtcManager={webrtcManager}
-          connectionInfo={connectionInfo}
-        />
+      <div className="flex-1 flex items-center justify-center p-2 sm:p-4">
+        <div className="w-full max-w-6xl">
+          <GomokuBoard
+            onBackToLobby={handleBackToLobby}
+            webrtcManager={webrtcManager}
+            connectionInfo={connectionInfo}
+          />
+        </div>
       </div>
     </div>
   );
